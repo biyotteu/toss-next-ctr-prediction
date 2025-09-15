@@ -35,6 +35,9 @@ def predict_main(cfg_path: str, ckpt_path: str = None):
     cats, nums = infer_feature_types(train_df_head, cfg.label_col, cfg.seq_col)
     cats = [c for c in cats if c not in set(cfg.force_drop_cols)]
     nums = [c for c in nums if c not in set(cfg.force_drop_cols)]
+    # remove target_feature from categorical features to match training pipeline
+    if getattr(cfg, 'target_feature', None) in cats:
+        cats = [c for c in cats if c != cfg.target_feature]
 
     # build model
     model_name = cfg.model.get('name', 'qin_like')

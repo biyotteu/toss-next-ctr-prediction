@@ -68,6 +68,7 @@ dataset_cache_progress: true      # tqdm 진행 표시
 dataset_cache_workers: 16         # 병렬 워커 수 (CPU 코어에 맞춰 조정)
 dataset_cache_chunk_rows: 500000  # 시퀀스 처리 청크 크기
 dataset_cache_backend: "memmap"    # "memmap" | "ram"
+dataset_cache_dir: ./artifacts/cache_seq  # 캐시 저장 경로(영구 재사용)
 # 범주형 해시 방식 선택
 #  - "fnv"     : 기존과 동일 매핑(체크포인트 호환), 병렬 파이썬(FNV) → 느리지만 동일
 #  - "pandas"  : 매우 빠름(벡터화), 다만 해시 매핑 달라짐(재학습 필요)
