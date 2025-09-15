@@ -224,8 +224,9 @@ def train_main(cfg_path: str):
         val_labels = np.concatenate(val_labels).astype(int)
         ap = average_precision(val_labels, val_probs)
         wll = weighted_logloss(val_labels, val_probs)
-        print(f"[VAL][E{epoch}] AP={ap:.6f}  WLL={wll:.6f}")
-        
+        score = 0.5 * ap + 0.5 * (1.0 / (1.0 + wll))
+        print(f"[VAL][E{epoch}] Score={score:.6f} AP={ap:.6f}  WLL={wll:.6f}")
+
         # wandb 검증 메트릭 로깅
         if use_wandb:
             epoch_train_loss = np.mean(losses) if losses else 0.0
@@ -284,7 +285,8 @@ def train_main(cfg_path: str):
         val_probs_cal = 1.0 / (1.0 + np.exp(-best_val_logits / T))
         ap_c = average_precision(best_val_labels, val_probs_cal)
         wll_c = weighted_logloss(best_val_labels, val_probs_cal)
-        print(f"[VAL][CAL] AP={ap_c:.6f}  WLL={wll_c:.6f}")
+        score = 0.5 * ap_c + 0.5 * (1.0 / (1.0 + wll_c))
+        print(f"[VAL][CAL] Score={score:.6f} AP={ap_c:.6f}  WLL={wll_c:.6f}")
         
         # wandb에 calibration 결과 로깅
         if use_wandb:

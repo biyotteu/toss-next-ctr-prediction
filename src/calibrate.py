@@ -106,7 +106,8 @@ def calibrate_main(cfg_path: str, ckpt_path: str = None, use_wll_override: bool 
     probs_c = 1.0 / (1.0 + np.exp(-(val_logits / T)))
     ap_c = average_precision(val_labels, probs_c)
     wll_c = weighted_logloss(val_labels, probs_c)
-    print(f"[VAL][POST] T={T:.6f}  AP={ap_c:.6f}  WLL={wll_c:.6f}")
+    score = 0.5 * ap_c + 0.5 * (1.0 / (1.0 + wll_c))
+    print(f"[VAL][POST] Score={score:.6f} AP={ap_c:.6f}  WLL={wll_c:.6f}")
 
     # Save temperature
     fname = save_as or 'temperature.json'
