@@ -19,12 +19,12 @@ seq_col: seq # comma‑separated ints as string
 # If l_feat_14 is missing or sparse, fallback will be inventory_id
 target_feature: l_feat_14
 seq_max_len: 256
-seq_vocab_size: 200000 # hashing buckets for seq tokens
+seq_vocab_size: 400000 # hashing buckets for seq tokens
 # Drop constants / bad cols (I/O optimization)
 force_drop_cols: [l_feat_20, l_feat_23]
 # Numeric/Category handling
 numeric_fillna: 0.0
-category_hash_buckets: 100000 # hashing trick buckets for generic categorical columns
+category_hash_buckets: 500000 # hashing trick buckets for generic categorical columns
 
 # =============================================
 # Split (leakage‑free options)
@@ -43,7 +43,7 @@ stratify_label: true
 # Imbalance & Sampling
 # =============================================
 # Option A: pos_weight for BCEWithLogitsLoss (no downsampling)
-use_neg_downsampling: true
+use_neg_downsampling: false
 neg_downsample_ratio: 0.2 # keep 20% of negatives within each batch (~1:10 pos:neg if base pos≈1.9%)
 pos_weight: null # if null, auto‑compute by global class ratio
 min_pos_per_batch: 16
@@ -77,9 +77,22 @@ dataset_cache_hash: "fnv"
 # =============================================
 batch_size: 8192    #4096 8192
 epochs: 100
-lr: 0.002
-weight_decay: 0.0
+lr: 0.001
+weight_decay: 1e-4
 grad_clip_norm: 5.0
+
+# =============================================
+# Scheduler
+# =============================================
+scheduler:
+  enabled: true
+  name: onecycle
+  max_lr: 0.003       # peak LR (보통 base lr의 2~3배)
+  pct_start: 0.1      # warmup 비율
+  div_factor: 25.0    # initial_lr = max_lr / div_factor
+  final_div_factor: 10000.0
+  three_phase: false
+  anneal_strategy: cos
 # =============================================
 # Model
 # =============================================
@@ -89,7 +102,7 @@ model:
   hidden_dim: 256 # used in qin_like MLP
   qnn_hidden: 256 # used in qin_like
   qnn_heads: 4 # used in qin_like
-  dropout: 0.1
+  dropout: 0.2
   attn_dim: 256 # 2 * embedding_dim
 
   # sparse target attention (qin_like)
@@ -99,7 +112,7 @@ model:
   qnn:
     num_layers: 4
     num_row: 4
-    net_dropout: 0.1
+    net_dropout: 0.2
     batch_norm: True
   attn_use_scale: true # scaled dot-product (qin_v9ish)
   attn_relu: true # ReLU gating instead of softmax (qin_v9ish)

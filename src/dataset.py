@@ -177,53 +177,86 @@ class CTRDataset(Dataset):
     def _build_cache(self, df: pd.DataFrame):
         N = len(df)
 
-        # 1) Categorical (pre-allocate, fill per column, free immediately)
+        # 0) Common cache base paths
         B = self.cfg.category_hash_buckets
         C = len(self.cats)
-        cat_mat = np.empty((N, C), dtype=np.int64) if C > 0 else np.zeros((N, 0), dtype=np.int64)
-        for j, c in enumerate(tqdm(self.cats, desc=f"cache: cats[{self.hash_mode}]", disable=not self.progress)):
-            if self.hash_mode == "pandas":
-                col = _hash_series_pandas(df[c], B)
-            else:
-                col = _hash_series_fnv_parallel(df[c], B, self.workers, self.chunk_rows, progress=False)
-            cat_mat[:, j] = col
-            del col
+        F = len(self.nums)
+        base_ds = os.path.join(self.cache_dir, f"ds_{N}_C{C}_F{F}_B{B}_{self.hash_mode}.")
+        path_cats = base_ds + "cats.int64.npy"
+        path_nums = base_ds + "nums.f32.npy"
+        path_tgt  = base_ds + "tgt.int64.npy"
+        path_lab  = base_ds + "labels.f32.npy"
+
+        # 1) Categorical (load if exists; else build and persist)
+        B = self.cfg.category_hash_buckets
+        if C == 0:
+            self._cats = torch.zeros((N, 0), dtype=torch.long)
+        elif os.path.exists(path_cats):
+            arr = np.load(path_cats, mmap_mode='r')
+            self._cats = torch.from_numpy(np.array(arr, copy=True)).long()
+        else:
+            cat_mat = np.empty((N, C), dtype=np.int64)
+            for j, c in enumerate(tqdm(self.cats, desc=f"cache: cats[{self.hash_mode}]", disable=not self.progress)):
+                if self.hash_mode == "pandas":
+                    col = _hash_series_pandas(df[c], B)
+                else:
+                    col = _hash_series_fnv_parallel(df[c], B, self.workers, self.chunk_rows, progress=False)
+                cat_mat[:, j] = col
+                del col
+                gc.collect()
+            np.save(path_cats, cat_mat, allow_pickle=False)
+            self._cats = torch.from_numpy(cat_mat.copy()).long()
+            del cat_mat
             gc.collect()
-        self._cats = torch.from_numpy(cat_mat.copy()).long()
-        del cat_mat
-        gc.collect()
 
         # 2) Numeric (pre-allocate, fill per column, free immediately)
-        F = len(self.nums)
-        num_mat = np.empty((N, F), dtype=np.float32) if F > 0 else np.zeros((N, 0), dtype=np.float32)
-        for j, c in enumerate(tqdm(self.nums, desc="cache: nums", disable=not self.progress)):
-            v = pd.to_numeric(df[c], errors='coerce').fillna(self.cfg.numeric_fillna).to_numpy(np.float32)
-            mu, sig = self.stats.get(c, (0.0, 1.0))
-            num_mat[:, j] = (v - mu) / (sig if sig else 1.0)
-            del v
+        if F == 0:
+            self._nums = torch.zeros((N, 0), dtype=torch.float32)
+        elif os.path.exists(path_nums):
+            arr = np.load(path_nums, mmap_mode='r')
+            self._nums = torch.from_numpy(np.array(arr, copy=True)).float()
+        else:
+            num_mat = np.empty((N, F), dtype=np.float32)
+            for j, c in enumerate(tqdm(self.nums, desc="cache: nums", disable=not self.progress)):
+                v = pd.to_numeric(df[c], errors='coerce').fillna(self.cfg.numeric_fillna).to_numpy(np.float32)
+                mu, sig = self.stats.get(c, (0.0, 1.0))
+                num_mat[:, j] = (v - mu) / (sig if sig else 1.0)
+                del v
+                gc.collect()
+            np.save(path_nums, num_mat, allow_pickle=False)
+            self._nums = torch.from_numpy(num_mat.copy()).float()
+            del num_mat
             gc.collect()
-        self._nums = torch.from_numpy(num_mat.copy()).float()
-        del num_mat
-        gc.collect()
 
         # 3) Target id
-        tgt_col = self.cfg.target_feature if self.cfg.target_feature in df.columns else 'inventory_id'
-        if tgt_col in df.columns:
-            if self.hash_mode == "pandas":
-                t_ids = _hash_series_pandas(df[tgt_col], B)
-            else:
-                t_ids = _hash_series_fnv_parallel(df[tgt_col], B, self.workers, self.chunk_rows, progress=False)
+        if os.path.exists(path_tgt):
+            arr = np.load(path_tgt, mmap_mode='r')
+            self._tgt = torch.from_numpy(np.array(arr, copy=True)).long()
         else:
-            t_ids = np.zeros(N, dtype=np.int64)
-        self._tgt = torch.tensor(t_ids, dtype=torch.long)
-        del t_ids
-        gc.collect()
+            tgt_col = self.cfg.target_feature if self.cfg.target_feature in df.columns else 'inventory_id'
+            if tgt_col in df.columns:
+                if self.hash_mode == "pandas":
+                    t_ids = _hash_series_pandas(df[tgt_col], B)
+                else:
+                    t_ids = _hash_series_fnv_parallel(df[tgt_col], B, self.workers, self.chunk_rows, progress=False)
+            else:
+                t_ids = np.zeros(N, dtype=np.int64)
+            np.save(path_tgt, t_ids, allow_pickle=False)
+            self._tgt = torch.tensor(t_ids, dtype=torch.long)
+            del t_ids
+            gc.collect()
 
         # 4) Labels
-        if self.cfg.label_col in df.columns:
-            self._labels = torch.tensor(df[self.cfg.label_col].to_numpy(np.float32), dtype=torch.float32)
+        if os.path.exists(path_lab):
+            arr = np.load(path_lab, mmap_mode='r')
+            self._labels = torch.from_numpy(np.array(arr, copy=True)).float()
         else:
-            self._labels = torch.tensor(np.full(N, -1.0, np.float32), dtype=torch.float32)
+            if self.cfg.label_col in df.columns:
+                labs = df[self.cfg.label_col].to_numpy(np.float32)
+            else:
+                labs = np.full(N, -1.0, np.float32)
+            np.save(path_lab, labs, allow_pickle=False)
+            self._labels = torch.tensor(labs, dtype=torch.float32)
 
         # 5) Sequence → RAM list OR memmap ragged
         if self.cache_backend == "ram":
@@ -425,6 +458,11 @@ def make_dataloaders(train_df: pd.DataFrame, val_df: pd.DataFrame, cfg) -> Tuple
     cats, nums = infer_feature_types(train_df, cfg.label_col, cfg.seq_col)
     cats = [c for c in cats if c not in set(cfg.force_drop_cols)]
     nums = [c for c in nums if c not in set(cfg.force_drop_cols)]
+
+    # Remove target_feature from categorical features to avoid duplicating the same signal
+    tgt_feat = getattr(cfg, "target_feature", None)
+    if tgt_feat in cats:
+        cats = [c for c in cats if c != tgt_feat]
 
     train_ds = CTRDataset(train_df, cfg, cats, nums, is_train=True)
     cfg.d['num_stats'] = train_ds.stats  # pass stats to val/test

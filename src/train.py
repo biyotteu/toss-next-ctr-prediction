@@ -1,9 +1,11 @@
 import os
 import json
 import numpy as np
+import gc
 import torch
 import shutil
 from torch.optim import AdamW
+from torch.optim.lr_scheduler import OneCycleLR
 from tqdm import tqdm
 from datetime import datetime
 try:
@@ -68,7 +70,8 @@ def train_main(cfg_path: str):
     # 2) Leakage-free split
     stage("Leakage-free split", 2, 8)
     train_part, val_part = leakage_free_split(train_df, cfg)
-
+    del train_df
+    gc.collect()
     # class stats (on train_part)
     pos_rate = float(train_part[cfg.label_col].mean())
     neg_pos_ratio = (1 - pos_rate) / max(pos_rate, 1e-8)
@@ -77,7 +80,11 @@ def train_main(cfg_path: str):
     # 3) Dataloaders
     stage("Build DataLoaders", 3, 8)
     train_loader, val_loader, input_dims = make_dataloaders(train_part, val_part, cfg)
-
+    del train_part
+    gc.collect()
+    del val_part
+    gc.collect()
+    
     # 4) Model
     stage("Build Model", 4, 8)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -110,6 +117,24 @@ def train_main(cfg_path: str):
     stage("Setup optimizer", 5, 8)
     optim = AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
+    # Scheduler (OneCycleLR) optional
+    scheduler = None
+    if hasattr(cfg, 'scheduler') and cfg.scheduler.get('enabled', False) and cfg.scheduler.get('name', 'onecycle') == 'onecycle':
+        steps_per_epoch = max(len(train_loader), 1)
+        total_steps = steps_per_epoch * cfg.epochs
+        scheduler = OneCycleLR(
+            optim,
+            max_lr=cfg.scheduler.get('max_lr', cfg.lr * 3.0),
+            epochs=cfg.epochs,
+            steps_per_epoch=steps_per_epoch,
+            pct_start=cfg.scheduler.get('pct_start', 0.1),
+            div_factor=cfg.scheduler.get('div_factor', 25.0),
+            final_div_factor=cfg.scheduler.get('final_div_factor', 10000.0),
+            three_phase=cfg.scheduler.get('three_phase', False),
+            anneal_strategy=cfg.scheduler.get('anneal_strategy', 'cos')
+        )
+        print(f"[INFO] OneCycleLR enabled: total_steps={total_steps}")
+
     pos_weight = cfg.pos_weight
     if pos_weight is None:
         pos_weight = max(1.0, neg_pos_ratio)
@@ -119,7 +144,7 @@ def train_main(cfg_path: str):
 
     # ADD (resume setup)
     start_epoch = 1
-    best_wll = float('inf')
+    best_score = float('-inf')
     best_epoch = None
     best_ckpt = None
 
@@ -136,11 +161,17 @@ def train_main(cfg_path: str):
                 optim.load_state_dict(ck['optim_state'])
             except Exception as e:
                 print(f"[RESUME] optimizer state load failed: {e}")
+        # restore scheduler state if available
+        if 'sched_state' in ck and scheduler is not None:
+            try:
+                scheduler.load_state_dict(ck['sched_state'])
+            except Exception as e:
+                print(f"[RESUME] scheduler state load failed: {e}")
         start_epoch = ck.get('epoch', 0) + 1
-        best_wll   = ck.get('best_wll', float('inf'))
+        best_score = ck.get('best_score', float('-inf'))
         best_epoch = ck.get('best_epoch', None)
         best_ckpt  = os.path.join(cfg.output_dir, "model_best.pt") if os.path.exists(os.path.join(cfg.output_dir, "model_best.pt")) else None
-        print(f"[RESUME] from {resume_path} → start_epoch={start_epoch}, best_wll={best_wll}")
+        print(f"[RESUME] from {resume_path} → start_epoch={start_epoch}, best_score={best_score}")
     else:
         print("[RESUME] fresh training (no checkpoint found)")
     # 6) Train loop with optional Hard Negative Mining
@@ -165,52 +196,59 @@ def train_main(cfg_path: str):
 
             logits = model(cats, nums, seqs, tgt_ids)
 
-            # ---- Hard Negative Mining (within kept batch) ----
+            # ---- Hard Negative Mining (within kept batch) + WLL-aligned class balancing ----
+            pos_mask = (labels == 1)
+            neg_mask = (labels == 0)
             if cfg.hnm.enable:
                 with torch.no_grad():
                     per_ex_loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels, reduction='none')
-                    neg_mask = (labels == 0)
-                    pos_mask = (labels == 1)
                     neg_losses = per_ex_loss[neg_mask]
                     if neg_losses.numel() > 0:
                         k = max(int(neg_losses.numel() * cfg.hnm.top_neg_frac), min(cfg.hnm.min_neg, neg_losses.numel()))
                         topk_vals, topk_idx = torch.topk(neg_losses, k)
-                        # build weights: keep positives, keep only top-k negatives
-                        weights = torch.zeros_like(labels)
-                        weights[pos_mask] = 1.0
+                        # Build correction weights (selection-prob inverse)
+                        corr = torch.zeros_like(labels)
+                        corr[pos_mask] = 1.0  # positives kept fully
                         # map back indices
                         neg_indices = torch.nonzero(neg_mask).squeeze(1)
                         keep_neg_indices = neg_indices[topk_idx]
-                        weights[keep_neg_indices] = 1.0
-                        # unbiased reweighting for negatives
+                        # selection prob: eff_down (from collate) * neg_keep_frac (from HNM)
                         neg_keep_frac = max(k / max(neg_losses.numel(), 1), 1e-6)
                         eff_down = cfg.neg_downsample_ratio if cfg.use_neg_downsampling else 1.0
-                        w_neg = 1.0 / max(eff_down * neg_keep_frac, 1e-6)
-                        weights[keep_neg_indices] = w_neg
+                        keep_prob = max(eff_down * neg_keep_frac, 1e-6)
+                        corr[keep_neg_indices] = 1.0 / keep_prob
                     else:
                         # no negatives -> fall back to ones
-                        weights = torch.ones_like(labels)
+                        corr = torch.ones_like(labels)
             else:
-                # Original weighting strategy
+                # Build correction weights for downsampling-only or none
+                corr = torch.ones_like(labels)
                 if cfg.use_neg_downsampling:
-                    weights = torch.ones_like(labels)
-                    neg_mask = (labels == 0)
                     if neg_mask.any():
-                        w_neg = 1.0 / max(cfg.neg_downsample_ratio, 1e-6)
-                        weights[neg_mask] = w_neg
-                else:
-                    weights = None
+                        corr[neg_mask] = 1.0 / max(cfg.neg_downsample_ratio, 1e-6)
 
-            # Loss
-            if weights is not None:
-                loss = weighted_bce_with_logits(logits, labels, weight=weights)
-            else:
-                loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels, pos_weight=pos_weight_t)
+            # Convert correction weights to WLL-balanced per-example weights
+            N = labels.numel()
+            with torch.no_grad():
+                sum_pos_corr = float((corr[pos_mask]).sum().item())
+                sum_neg_corr = float((corr[neg_mask]).sum().item())
+                if sum_pos_corr > 0.0 and sum_neg_corr > 0.0:
+                    weights = torch.zeros_like(labels)
+                    weights[pos_mask] = (N * 0.5) * (corr[pos_mask] / sum_pos_corr)
+                    weights[neg_mask] = (N * 0.5) * (corr[neg_mask] / sum_neg_corr)
+                else:
+                    # degenerate batch: use uniform weights
+                    weights = torch.ones_like(labels)
+
+            # Loss (WLL-aligned weighted BCE)
+            loss = weighted_bce_with_logits(logits, labels, weight=weights)
 
             optim.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip_norm)
             optim.step()
+            if scheduler is not None:
+                scheduler.step()
 
             losses.append(loss.item())
             
@@ -259,13 +297,14 @@ def train_main(cfg_path: str):
         if use_wandb:
             epoch_train_loss = np.mean(losses) if losses else 0.0
             wandb.log({
+                'val/score': score,
                 'val/average_precision': ap,
                 'val/weighted_logloss': wll,
                 'train/epoch_loss': epoch_train_loss,
                 'epoch': epoch,
             })
 
-        # save checkpoint
+        # save checkpoint (latest)
         if cfg.save_every_epoch:
             ckpt = os.path.join(cfg.output_dir, f"model_epoch{epoch}.pt")
             state = {
@@ -273,16 +312,17 @@ def train_main(cfg_path: str):
                 'model_state': model.state_dict(),
                 'cfg': cfg.d,
                 'optim_state': optim.state_dict(),
-                'best_wll': best_wll,
+                'sched_state': scheduler.state_dict() if scheduler is not None else None,
+                'best_score': best_score,
                 'best_epoch': best_epoch,
             }
             torch.save(state, ckpt)
             torch.save(state, os.path.join(cfg.output_dir, "model_latest.pt"))
             print(f"[CKPT] saved to {ckpt} (and updated model_latest.pt)")
                     
-        # save best model
-        if wll < best_wll:
-            best_wll = wll
+        # save best model (by score)
+        if score > best_score:
+            best_score = score
             best_model = model.state_dict()
             best_epoch = epoch
             best_val_logits = val_logits
@@ -294,7 +334,8 @@ def train_main(cfg_path: str):
                 'model_state': best_model,
                 'cfg': cfg.d,
                 'optim_state': optim.state_dict(),
-                'best_wll': best_wll,
+                'sched_state': scheduler.state_dict() if scheduler is not None else None,
+                'best_score': best_score,
                 'best_epoch': best_epoch,
             }, best_ckpt)
             print(f"[CKPT] saved best to {best_ckpt}")
@@ -302,8 +343,9 @@ def train_main(cfg_path: str):
             # wandb에 최고 성능 메트릭 로깅
             if use_wandb:
                 wandb.log({
-                    'best/wll': best_wll,
+                    'best/score': best_score,
                     'best/ap': ap,
+                    'best/wll': wll,
                     'best/epoch': best_epoch,
                 })
 
