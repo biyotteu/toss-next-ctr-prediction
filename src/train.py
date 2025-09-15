@@ -5,6 +5,7 @@ import torch
 import shutil
 from torch.optim import AdamW
 from tqdm import tqdm
+from datetime import datetime
 try:
     import wandb
     WANDB_AVAILABLE = True
@@ -25,7 +26,8 @@ from .utils import _pick_resume_path
 
 def train_main(cfg_path: str):
     cfg = Cfg.load(cfg_path)
-    cfg.output_dir = os.path.join(cfg.output_dir, cfg.exp_name)
+    run_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    cfg.output_dir = os.path.join(cfg.output_dir, run_time)
     os.makedirs(cfg.output_dir, exist_ok=True)
     shutil.copy(cfg_path, os.path.join(cfg.output_dir, 'config.yaml'))
     os.makedirs(cfg.artifacts_dir, exist_ok=True)
