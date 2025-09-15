@@ -50,7 +50,7 @@ def infer_feature_types(df: pd.DataFrame, label_col: str, seq_col: str):
     for c in df.columns:
         if c in EXCLUDE_COLS or c == label_col or c == seq_col:
             continue
-        if df[c].dtype == 'object' or any(match_any(c, CAT_PATTERNS)):
+        if df[c].dtype == 'object' or match_any(c, CAT_PATTERNS):
             cats.append(c)
         else:
             nums.append(c)
