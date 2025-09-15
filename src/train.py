@@ -85,6 +85,7 @@ def train_main(cfg_path: str):
 
     # 6) Train loop with optional Hard Negative Mining
     stage("Train", 6, 8)
+    best_wll = float('inf')
     for epoch in range(1, cfg.epochs + 1):
         model.train()
         losses = []
@@ -97,7 +98,7 @@ def train_main(cfg_path: str):
             seqs = seqs.to(device, non_blocking=True)
             tgt_ids = tgt_ids.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
-            
+
             logits = model(cats, nums, seqs, tgt_ids)
 
             # ---- Hard Negative Mining (within kept batch) ----
@@ -183,7 +184,7 @@ def train_main(cfg_path: str):
 
         # save checkpoint
         if cfg.save_every_epoch:
-            ckpt = os.path.join(cfg.output_dir, f"model_epoch{epoch}.pt")
+            ckpt = os.path.join(cfg.output_dir, f"model_epoch{epoch}_wll{wll:.6f}.pt")
             torch.save({
                 'epoch': epoch,
                 'model_state': model.state_dict(),
@@ -192,13 +193,13 @@ def train_main(cfg_path: str):
             print(f"[CKPT] saved to {ckpt}")
         
         # save best model
-        if wll < best_wll:
-            best_wll = wll
-            best_model = model.state_dict()
-            best_epoch = epoch
-            best_ckpt = os.path.join(cfg.output_dir, f"model_best.pt")
-            torch.save({'model_state': best_model, 'cfg': cfg.d}, best_ckpt)
-            print(f"[CKPT] saved best to {best_ckpt}")
+        # if wll < best_wll:
+        #     best_wll = wll
+        #     best_model = model.state_dict()
+        #     best_epoch = epoch
+        #     best_ckpt = os.path.join(cfg.output_dir, f"model_best.pt")
+        #     torch.save({'model_state': best_model, 'cfg': cfg.d}, best_ckpt)
+        #     print(f"[CKPT] saved best to {best_ckpt}")
 
     # 7) Temperature scaling calibration on final val set
     stage("Calibrate temperature (val)", 7, 8)
