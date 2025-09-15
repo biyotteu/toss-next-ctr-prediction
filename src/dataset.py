@@ -60,6 +60,15 @@ def infer_feature_types(df: pd.DataFrame, label_col: str, seq_col: str):
 # ----------------------------
 # Hash helpers
 # ----------------------------
+def _hash_list_fnv_chunk(lst, buckets: int) -> np.ndarray:
+    """Pickle-safe worker: list[str] -> np.int64 hashed ids (FNV mapping)."""
+    out = np.empty(len(lst), dtype=np.int64)
+    Bm1 = max(buckets - 1, 1)
+    for i, x in enumerate(lst):
+        s = "" if x is None else str(x)
+        out[i] = 0 if s == "" else (1 + hash64(s, Bm1))
+    return out
+
 def _hash_series_pandas(s: pd.Series, buckets: int) -> np.ndarray:
     """Very fast vectorized hash (SipHash via pandas). Mapping differs from FNV."""
     from pandas.util import hash_pandas_object
@@ -74,23 +83,25 @@ def _hash_series_fnv_parallel(
 ) -> np.ndarray:
     """Keep EXACT same mapping as hash64(FNV). Parallelized over chunks."""
     s = s.astype("string").fillna("")
-    chunks = [s.iloc[i:i + chunk_rows] for i in range(0, len(s), chunk_rows)]
+    # 워커에 pandas 객체 대신 list[str]만 전달 (pickle-friendly)
+    chunks = [s.iloc[i:i + chunk_rows].astype("string").fillna("").tolist()
+              for i in range(0, len(s), chunk_rows)]
     out = [None] * len(chunks)
+
     if len(chunks) == 1 or workers <= 1:
         for i, ch in enumerate(tqdm(chunks, desc="cache: cats(fnv)", disable=not progress)):
-            out[i] = ch.apply(lambda x: 0 if x == "" else 1 + hash64(x, buckets - 1)).to_numpy(np.int64)
+            out[i] = _hash_list_fnv_chunk(ch, buckets)
     else:
+        from concurrent.futures import ProcessPoolExecutor, as_completed
         with ProcessPoolExecutor(max_workers=workers) as ex:
-            futs = {
-                ex.submit(
-                    lambda ser: ser.apply(lambda x: 0 if x == "" else 1 + hash64(x, buckets - 1)).to_numpy(np.int64),
-                    ch
-                ): i
-                for i, ch in enumerate(chunks)
-            }
-            for fut in tqdm(as_completed(futs), total=len(futs), desc="cache: cats(fnv)", disable=not progress):
+            futs = {ex.submit(_hash_list_fnv_chunk, ch, buckets): i
+                    for i, ch in enumerate(chunks)}
+            for fut in tqdm(as_completed(futs), total=len(futs),
+                            desc="cache: cats(fnv)", disable=not progress):
                 out[futs[fut]] = fut.result()
+
     return np.concatenate(out) if len(out) > 1 else out[0]
+
 
 
 # ----------------------------
