@@ -8,6 +8,7 @@ from torch.utils.data import Dataset, DataLoader
 from .utils import hash64
 from .data_schema import CAT_PATTERNS, EXCLUDE_COLS, match_any
 from types import SimpleNamespace
+from tqdm import tqdm
 
 class CollateWithCfg:
     """Windows spawn에서 picklable한 collate_fn 래퍼"""
@@ -107,7 +108,8 @@ class CTRDataset(Dataset):
             # --- Categorical: hash bucket ---
             cat_ids = []
             B = self.cfg.category_hash_buckets
-            for c in self.cats:
+            cat_bar = tqdm(self.cats, desc="Encoding categories", leave=False)
+            for c in cat_bar:
                 v = df[c].astype("string").fillna("")        # NaN -> ""
                 # "" → 0 (pad), 그 외는 1..B 범위
                 ids = v.apply(lambda x: 0 if x == "" else 1 + hash64(x, B - 1)).to_numpy(np.int64)
@@ -117,7 +119,8 @@ class CTRDataset(Dataset):
 
             # --- Numeric: z-score ---
             xs = []
-            for c in self.nums:
+            num_bar = tqdm(self.nums, desc="Encoding numerics", leave=False)
+            for c in num_bar:
                 v = pd.to_numeric(df[c], errors='coerce').fillna(self.cfg.numeric_fillna).to_numpy(np.float32)
                 mu, sig = self.stats.get(c, (0.0, 1.0))
                 xs.append((v - mu) / (sig if sig else 1.0))
@@ -129,7 +132,8 @@ class CTRDataset(Dataset):
             maxL = self.cfg.seq_max_len
             vocab = self.cfg.seq_vocab_size
             seq_series = df[self.cfg.seq_col].astype("string") if self.cfg.seq_col in df.columns else pd.Series([""] * len(df))
-            for s in seq_series:
+            seq_bar = tqdm(seq_series, desc="Encoding sequences", leave=False)
+            for s in seq_bar:
                 toks = [] if s is None or s != s else s.split(',')
                 if maxL > 0:
                     toks = toks[-maxL:]
