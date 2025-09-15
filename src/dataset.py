@@ -30,12 +30,12 @@ class CTRFrame:
     def read_all(self, columns: List[str] = None) -> pd.DataFrame:
         cols = columns or self.all_cols
         table = self.pf.read(columns=cols)
-        return table.to_pandas(types_mapper=pd.ArrowDtype)
+        return table.to_pandas()
 
     def read_row_group(self, rg_idx: int, columns: List[str] = None) -> pd.DataFrame:
         cols = columns or self.all_cols
         table = self.pf.read_row_group(rg_idx, columns=cols)
-        return table.to_pandas(types_mapper=pd.ArrowDtype)
+        return table.to_pandas()
 
     @property
     def num_row_groups(self):
