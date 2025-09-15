@@ -15,7 +15,7 @@ def predict_main(cfg_path: str):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # load model
-    ckpt = os.path.join(cfg.output_dir, 'model_final.pt')
+    ckpt = os.path.join(cfg.output_dir, 'model_best.pt')
     ck = torch.load(ckpt, map_location=device)
     cfg_loaded = Cfg(ck.get('cfg', cfg.d))
 

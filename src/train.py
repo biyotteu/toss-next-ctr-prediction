@@ -86,6 +86,13 @@ def train_main(cfg_path: str):
     # 6) Train loop with optional Hard Negative Mining
     stage("Train", 6, 8)
     best_wll = float('inf')
+    best_model = None
+    best_epoch = None
+    best_val_logits = None
+    best_val_labels = None
+    best_val_probs = None
+    best_ckpt = None
+
     for epoch in range(1, cfg.epochs + 1):
         model.train()
         losses = []
@@ -193,27 +200,35 @@ def train_main(cfg_path: str):
             print(f"[CKPT] saved to {ckpt}")
         
         # save best model
-        # if wll < best_wll:
-        #     best_wll = wll
-        #     best_model = model.state_dict()
-        #     best_epoch = epoch
-        #     best_ckpt = os.path.join(cfg.output_dir, f"model_best.pt")
-        #     torch.save({'model_state': best_model, 'cfg': cfg.d}, best_ckpt)
-        #     print(f"[CKPT] saved best to {best_ckpt}")
+        if wll < best_wll:
+            best_wll = wll
+            best_model = model.state_dict()
+            best_epoch = epoch
+            best_val_logits = val_logits
+            best_val_labels = val_labels
+            best_val_probs = val_probs
+            best_ckpt = os.path.join(cfg.output_dir, f"model_best.pt")
+            torch.save({'model_state': best_model, 'cfg': cfg.d}, best_ckpt)
+            print(f"[CKPT] saved best to {best_ckpt}")
 
     # 7) Temperature scaling calibration on final val set
-    stage("Calibrate temperature (val)", 7, 8)
-    scaler = TemperatureScaler(lr=cfg.calibration.lr, max_iter=cfg.calibration.max_iter)
-    T = scaler.fit_from_arrays(val_logits, val_labels)
-    cal_path = os.path.join(cfg.artifacts_dir, 'temperature.json')
-    with open(cal_path, 'w', encoding='utf-8') as f:
-        json.dump({'T': float(T)}, f)
-    print(f"[CAL] learned temperature T={T:.4f} -> saved {cal_path}")
+    if cfg.calibration.use_wll_weights:
+        stage("Calibrate temperature (val)", 7, 8)
+        scaler = TemperatureScaler(
+            lr=cfg.calibration.lr,
+            max_iter=cfg.calibration.max_iter,
+            use_wll_weights=cfg.calibration.use_wll_weights 
+        )
+        T = scaler.fit_from_arrays(best_val_logits, best_val_labels)
+        cal_path = os.path.join(cfg.artifacts_dir, 'temperature.json')
+        with open(cal_path, 'w', encoding='utf-8') as f:
+            json.dump({'T': float(T)}, f)
+        print(f"[CAL] learned temperature T={T:.4f} -> saved {cal_path}")
 
     # report calibrated metrics
-    val_probs_cal = 1.0 / (1.0 + np.exp(-val_logits / T))
-    ap_c = average_precision(val_labels, val_probs_cal)
-    wll_c = weighted_logloss(val_labels, val_probs_cal)
+    val_probs_cal = 1.0 / (1.0 + np.exp(-best_val_logits / T))
+    ap_c = average_precision(best_val_labels, val_probs_cal)
+    wll_c = weighted_logloss(best_val_labels, val_probs_cal)
     print(f"[VAL][CAL] AP={ap_c:.6f}  WLL={wll_c:.6f}")
 
     # 8) Save final model

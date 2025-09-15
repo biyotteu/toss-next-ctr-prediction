@@ -18,14 +18,14 @@ id_col: ID
 seq_col: seq # comma‑separated ints as string
 # If l_feat_14 is missing or sparse, fallback will be inventory_id
 target_feature: l_feat_14
-seq_max_len: 100
+seq_max_len: 256
 seq_vocab_size: 200000 # hashing buckets for seq tokens
 # Drop constants / bad cols (I/O optimization)
 force_drop_cols: [l_feat_20, l_feat_23]
 # Numeric/Category handling
 numeric_fillna: 0.0
 category_hash_buckets: 100000 # hashing trick buckets for generic categorical columns
-embedding_dim: 32
+
 # =============================================
 # Split (leakage‑free options)
 # =============================================
@@ -50,7 +50,7 @@ min_pos_per_batch: 16
 
 # Hard Negative Mining (OHEM‑style)
 hnm:
-  enable: true
+  enable: false
   top_neg_frac: 0.2 # keep hardest 20% negatives (by per‑example loss) in the batch
   min_neg: 256 # at least this many negatives kept if available
 
@@ -58,38 +58,39 @@ hnm:
 # DataLoader
 # =============================================
 persistent_workers: true
-prefetch_factor: 4
-num_workers: 8
+prefetch_factor: 8
+num_workers: 16
 pin_memory: true
 
 # =============================================
 # Optimization
 # =============================================
-batch_size: 27000   #4096 8192
-epochs: 3
-lr: 0.001
+batch_size: 8192    #4096 8192
+epochs: 100
+lr: 0.002
 weight_decay: 0.0
 grad_clip_norm: 5.0
 # =============================================
-# QIN‑like Model
+# Model
 # =============================================
+embedding_dim: 128
 model:
   name: qin_v9ish # options: qin_like | qin_v9ish
   hidden_dim: 256 # used in qin_like MLP
   qnn_hidden: 256 # used in qin_like
   qnn_heads: 4 # used in qin_like
   dropout: 0.1
+  attn_dim: 256
+
   # sparse target attention (qin_like)
   attn_topk: 30
-  attn_dim: 128
-
 
   # qin_v9ish (closer to original QIN)
   qnn:
-    num_layers: 3
-    num_row: 2
+    num_layers: 4
+    num_row: 4
     net_dropout: 0.1
-    batch_norm: false
+    batch_norm: True
   attn_use_scale: true # scaled dot-product (qin_v9ish)
   attn_relu: true # ReLU gating instead of softmax (qin_v9ish)
 
@@ -100,6 +101,7 @@ calibration:
   temperature_scaling: true
   lr: 0.05
   max_iter: 1000
+  use_wll_weights: true
 # =============================================
 # Prediction
 # =============================================
