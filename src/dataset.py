@@ -1,7 +1,7 @@
 # src/dataset.py
 import os
 import gc
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
@@ -137,12 +137,20 @@ def _seq_parse_chunk(arr, maxL: int, vocab: int):
 # CTR Dataset (with cache)
 # ----------------------------
 class CTRDataset(Dataset):
-    def __init__(self, df: pd.DataFrame, cfg, cats: List[str], nums: List[str], is_train: bool):
+    def __init__(self, df: pd.DataFrame, cfg, cats: List[str], nums: List[str], is_train: bool, partition: Optional[str] = None):
         self.df = df
         self.cfg = cfg
         self.cats = cats
         self.nums = nums
         self.is_train = is_train
+        # partition tag: explicit > inferred
+        if partition is not None:
+            self.partition = partition
+        else:
+            if is_train:
+                self.partition = "train"
+            else:
+                self.partition = "val" if cfg.label_col in df.columns else "test"
 
         # numeric z-scoring stats
         stats = {}
@@ -181,7 +189,8 @@ class CTRDataset(Dataset):
         B = self.cfg.category_hash_buckets
         C = len(self.cats)
         F = len(self.nums)
-        base_ds = os.path.join(self.cache_dir, f"ds_{N}_C{C}_F{F}_B{B}_{self.hash_mode}.")
+        part = self.partition
+        base_ds = os.path.join(self.cache_dir, f"ds_{part}_{N}_C{C}_F{F}_B{B}_{self.hash_mode}.")
         path_cats = base_ds + "cats.int64.npy"
         path_nums = base_ds + "nums.f32.npy"
         path_tgt  = base_ds + "tgt.int64.npy"
@@ -287,7 +296,7 @@ class CTRDataset(Dataset):
         N = len(df)
         seq_ser = df[self.cfg.seq_col].astype("string") if self.cfg.seq_col in df.columns else pd.Series([""] * N)
 
-        base = os.path.join(self.cache_dir, f"seq_{N}_L{maxL}_V{vocab}.")
+        base = os.path.join(self.cache_dir, f"seq_{self.partition}_{N}_L{maxL}_V{vocab}.")
         path_len = base + "len.npy"
         path_off = base + "off.npy"
         path_dat = base + "dat.int32"
@@ -464,9 +473,9 @@ def make_dataloaders(train_df: pd.DataFrame, val_df: pd.DataFrame, cfg) -> Tuple
     if tgt_feat in cats:
         cats = [c for c in cats if c != tgt_feat]
 
-    train_ds = CTRDataset(train_df, cfg, cats, nums, is_train=True)
+    train_ds = CTRDataset(train_df, cfg, cats, nums, is_train=True, partition="train")
     cfg.d['num_stats'] = train_ds.stats  # pass stats to val/test
-    val_ds = CTRDataset(val_df, cfg, cats, nums, is_train=False)
+    val_ds = CTRDataset(val_df, cfg, cats, nums, is_train=False, partition="val")
 
     # DataLoader perf flags
     pw = bool(getattr(cfg, "persistent_workers", True)) and getattr(cfg, "num_workers", 0) > 0

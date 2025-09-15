@@ -78,7 +78,7 @@ def predict_main(cfg_path: str, ckpt_path: str = None):
     for rg in rg_pbar:
         df = test_frame.read_row_group(rg, columns=all_cols)
         ids = df[id_col].values
-        ds = CTRDataset(df, cfg_loaded, cats, nums, is_train=False)
+        ds = CTRDataset(df, cfg_loaded, cats, nums, is_train=False, partition="test")
         bs = cfg.batch_size
         
         # 현재 row group 내의 배치 처리 진행상황 표시

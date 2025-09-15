@@ -115,7 +115,16 @@ def train_main(cfg_path: str):
 
     # 5) Optimizer & pos_weight
     stage("Setup optimizer", 5, 8)
-    optim = AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    # Cast potentially string-typed config values to float safely
+    try:
+        lr_val = float(cfg.lr)
+    except Exception:
+        lr_val = 0.001
+    try:
+        wd_val = 0.0 if cfg.weight_decay is None else float(cfg.weight_decay)
+    except Exception:
+        wd_val = 0.0
+    optim = AdamW(model.parameters(), lr=lr_val, weight_decay=wd_val)
 
     # Scheduler (OneCycleLR) optional
     scheduler = None
