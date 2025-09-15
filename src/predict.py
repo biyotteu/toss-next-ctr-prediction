@@ -3,6 +3,7 @@ import json
 import numpy as np
 import pandas as pd
 import torch
+from tqdm import tqdm
 from .config import Cfg
 from .dataset import CTRFrame, infer_feature_types, CTRDataset, collate_fn
 from .models.qin_like import QINLike
@@ -71,12 +72,23 @@ def predict_main(cfg_path: str):
     id_col = cfg.id_col
     ids_all, probs_all = [], []
 
-    for rg in range(pf.num_row_groups):
+    # Row group 처리 진행상황 표시
+    rg_pbar = tqdm(range(pf.num_row_groups), desc="Processing row groups", leave=True)
+    
+    for rg in rg_pbar:
         df = test_frame.read_row_group(rg, columns=all_cols)
         ids = df[id_col].values
         ds = CTRDataset(df, cfg_loaded, cats, nums, is_train=False)
         bs = cfg.batch_size
-        for i in range(0, len(ds), bs):
+        
+        # 현재 row group 내의 배치 처리 진행상황 표시
+        num_batches = (len(ds) + bs - 1) // bs
+        batch_pbar = tqdm(range(0, len(ds), bs), 
+                         desc=f"RG {rg+1}/{pf.num_row_groups} batches", 
+                         leave=False,
+                         total=num_batches)
+        
+        for i in batch_pbar:
             batch = [ds[j] for j in range(i, min(i+bs, len(ds)))]
             cats_b, nums_b, seq_b, tgt_b, _ = collate_fn(batch, cfg_loaded)
             cats_b = cats_b.to(device)
@@ -87,8 +99,20 @@ def predict_main(cfg_path: str):
             logits = logits / T
             probs = torch.sigmoid(logits).cpu().numpy()
             probs_all.append(probs)
+            
+            # 배치 진행상황 업데이트
+            batch_pbar.set_postfix({
+                'samples': f'{min(i+bs, len(ds))}/{len(ds)}',
+                'batch_size': len(batch)
+            })
+        
         ids_all.append(ids)
-        print(f"[PRED] processed row_group {rg+1}/{pf.num_row_groups}")
+        
+        # Row group 진행상황 업데이트
+        rg_pbar.set_postfix({
+            'samples_processed': len(ids),
+            'total_batches': num_batches
+        })
 
     probs_all = np.concatenate(probs_all)
     ids_all = np.concatenate(ids_all)
