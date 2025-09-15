@@ -1,5 +1,8 @@
+# src/dataset.py
 import os
+import gc
 from typing import List, Tuple
+
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
@@ -7,14 +10,15 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
+from numpy.lib.format import open_memmap
 
 from .utils import hash64
 from .data_schema import CAT_PATTERNS, EXCLUDE_COLS, match_any
 
 
-# =========================
-# Parquet lightweight frame
-# =========================
+# ----------------------------
+# Parquet lightweight wrapper
+# ----------------------------
 class CTRFrame:
     """Lightweight loader around parquet with column pruning."""
     def __init__(self, parquet_path: str, drop_cols: List[str]):
@@ -38,9 +42,9 @@ class CTRFrame:
         return self.pf.num_row_groups
 
 
-# ======================
-# Feature type inference
-# ======================
+# ----------------------------
+# Feature inference
+# ----------------------------
 def infer_feature_types(df: pd.DataFrame, label_col: str, seq_col: str):
     cats, nums = [], []
     for c in df.columns:
@@ -53,68 +57,74 @@ def infer_feature_types(df: pd.DataFrame, label_col: str, seq_col: str):
     return cats, nums
 
 
-# ======================
-# Sequence parsing utils
-# ======================
-def parse_seq_col(s: str, max_len: int) -> List[str]:
-    if not isinstance(s, str):
-        return []
-    toks = [t.strip() for t in s.split(',') if t.strip() != ""]
-    if max_len > 0:
-        toks = toks[-max_len:]
-    return toks
+# ----------------------------
+# Hash helpers
+# ----------------------------
+def _hash_series_pandas(s: pd.Series, buckets: int) -> np.ndarray:
+    """Very fast vectorized hash (SipHash via pandas). Mapping differs from FNV."""
+    from pandas.util import hash_pandas_object
+    if buckets <= 1 or len(s) == 0:
+        return np.zeros(len(s), dtype=np.int64)
+    hv = hash_pandas_object(s.astype("string").fillna(""), index=False).values
+    return (hv % (buckets - 1)).astype(np.int64) + 1
 
 
-def _seq_worker(args):
-    """MP worker: parse+hash a chunk of sequence strings."""
-    arr, maxL, vocab = args  # arr: list[str|NaN]
-    out = []
-    for s in arr:
-        if not isinstance(s, str):
-            out.append([0]); continue
-        toks = [t.strip() for t in s.split(',') if t.strip() != ""]
-        if maxL > 0:
-            toks = toks[-maxL:]
-        if not toks:
-            out.append([0]); continue
-        ids = [1 + hash64(t, vocab - 1) for t in toks]
-        out.append(ids)
-    return out  # list[list[int]]
-
-
-# ======================
-# Categorical hash utils
-# ======================
-def _hash_series_fnv_parallel(s: pd.Series, buckets: int, workers: int, progress: bool, chunk_rows: int) -> np.ndarray:
-    """Keep EXACT same mapping as hash64(FNV). Parallelized over chunks (Python-level)."""
+def _hash_series_fnv_parallel(
+    s: pd.Series, buckets: int, workers: int, chunk_rows: int, progress: bool
+) -> np.ndarray:
+    """Keep EXACT same mapping as hash64(FNV). Parallelized over chunks."""
     s = s.astype("string").fillna("")
-    chunks = [s.iloc[i:i+chunk_rows] for i in range(0, len(s), chunk_rows)]
+    chunks = [s.iloc[i:i + chunk_rows] for i in range(0, len(s), chunk_rows)]
     out = [None] * len(chunks)
-
     if len(chunks) == 1 or workers <= 1:
         for i, ch in enumerate(tqdm(chunks, desc="cache: cats(fnv)", disable=not progress)):
             out[i] = ch.apply(lambda x: 0 if x == "" else 1 + hash64(x, buckets - 1)).to_numpy(np.int64)
     else:
         with ProcessPoolExecutor(max_workers=workers) as ex:
-            futs = {ex.submit(lambda ser: ser.apply(lambda x: 0 if x == "" else 1 + hash64(x, buckets - 1)).to_numpy(np.int64), ch): i
-                    for i, ch in enumerate(chunks)}
+            futs = {
+                ex.submit(
+                    lambda ser: ser.apply(lambda x: 0 if x == "" else 1 + hash64(x, buckets - 1)).to_numpy(np.int64),
+                    ch
+                ): i
+                for i, ch in enumerate(chunks)
+            }
             for fut in tqdm(as_completed(futs), total=len(futs), desc="cache: cats(fnv)", disable=not progress):
                 out[futs[fut]] = fut.result()
     return np.concatenate(out) if len(out) > 1 else out[0]
 
 
-def _hash_series_pandas(s: pd.Series, buckets: int) -> np.ndarray:
-    """Very fast vectorized hash via pandas (SipHash64). Mapping differs from FNV."""
-    from pandas.util import hash_pandas_object
-    if buckets <= 1 or len(s) == 0:
-        return np.zeros(len(s), dtype=np.int64)
-    hv = hash_pandas_object(s.astype("string").fillna(""), index=False).values  # uint64
-    return (hv % (buckets - 1)).astype(np.int64) + 1
+# ----------------------------
+# Sequence workers (per-chunk)
+# ----------------------------
+def _seq_parse_chunk(arr, maxL: int, vocab: int):
+    """
+    Returns:
+      lengths: np.int32 [n_rows]
+      flat    : np.int32 [sum(lengths)]
+    """
+    lengths = []
+    flat = []
+    for s in arr:
+        if not isinstance(s, str):
+            lengths.append(1)
+            flat.append(0)
+            continue
+        toks = [t.strip() for t in s.split(',') if t.strip() != ""]
+        if maxL > 0:
+            toks = toks[-maxL:]
+        if not toks:
+            lengths.append(1)
+            flat.append(0)
+            continue
+        ids = [1 + hash64(t, vocab - 1) for t in toks]
+        lengths.append(len(ids))
+        flat.extend(ids)
+    return (np.asarray(lengths, dtype=np.int32), np.asarray(flat, dtype=np.int32))
 
 
-# ===========
-# CTR Dataset
-# ===========
+# ----------------------------
+# CTR Dataset (with cache)
+# ----------------------------
 class CTRDataset(Dataset):
     def __init__(self, df: pd.DataFrame, cfg, cats: List[str], nums: List[str], is_train: bool):
         self.df = df
@@ -123,96 +133,187 @@ class CTRDataset(Dataset):
         self.nums = nums
         self.is_train = is_train
 
-        # numeric stats
+        # numeric z-scoring stats
         stats = {}
         if is_train:
             for c in nums:
                 v = pd.to_numeric(df[c], errors='coerce')
                 mu, sig = float(v.mean()), float(v.std(ddof=0))
-                if sig == 0 or np.isnan(sig): sig = 1.0
+                if sig == 0 or np.isnan(sig):
+                    sig = 1.0
                 stats[c] = (mu, sig)
             self.stats = stats
         else:
             self.stats = getattr(cfg, 'num_stats', {})
 
-        # cache toggles
+        # caching toggles
         self.cache = bool(getattr(cfg, "dataset_cache", False))
+        self.cache_backend = str(getattr(cfg, "dataset_cache_backend", "memmap")).lower()  # "memmap" | "ram"
+        self.cache_dir = str(getattr(cfg, "dataset_cache_dir", "./artifacts/cache_seq"))
+        self.progress = bool(getattr(cfg, "dataset_cache_progress", True))
+        self.workers = int(getattr(cfg, "dataset_cache_workers", max(1, (os.cpu_count() or 2) // 2)))
+        self.chunk_rows = int(getattr(cfg, "dataset_cache_chunk_rows", 200_000))
+        self.hash_mode = str(getattr(cfg, "dataset_cache_hash", "fnv")).lower()  # "fnv" | "pandas"
+
         if self.cache:
-            progress = bool(getattr(cfg, "dataset_cache_progress", True))
-            workers = int(getattr(cfg, "dataset_cache_workers", max(1, (os.cpu_count() or 2)//2)))
-            chunk_rows = int(getattr(cfg, "dataset_cache_chunk_rows", 200_000))
-            hash_mode = str(getattr(cfg, "dataset_cache_hash", "fnv")).lower()  # "fnv" | "pandas"
-
-            # ---------- Categorical (parallel or vectorized) ----------
-            B = self.cfg.category_hash_buckets
-            cat_blocks = []
-            for c in tqdm(self.cats, desc=f"cache: cats[{hash_mode}]", disable=not progress):
-                if hash_mode == "pandas":
-                    ids = _hash_series_pandas(df[c], B)
-                else:
-                    ids = _hash_series_fnv_parallel(df[c], B, workers, progress=False, chunk_rows=chunk_rows)
-                cat_blocks.append(ids)
-            cat_mat = np.stack(cat_blocks, axis=1) if cat_blocks else np.zeros((len(df), 0), dtype=np.int64)
-            self._cats = torch.tensor(cat_mat, dtype=torch.long)
-
-            # ---------- Numeric (vectorized) ----------
-            xs = []
-            for c in tqdm(self.nums, desc="cache: nums", disable=not progress):
-                v = pd.to_numeric(df[c], errors='coerce').fillna(self.cfg.numeric_fillna).to_numpy(np.float32)
-                mu, sig = self.stats.get(c, (0.0, 1.0))
-                xs.append((v - mu) / (sig if sig else 1.0))
-            num_mat = np.stack(xs, axis=1) if xs else np.zeros((len(df), 0), dtype=np.float32)
-            self._nums = torch.tensor(num_mat, dtype=torch.float32)
-
-            # ---------- Sequence (multiprocessing over chunks) ----------
-            self._seqs = []
-            vocab = self.cfg.seq_vocab_size
-            maxL = self.cfg.seq_max_len
-            seq_ser = df[self.cfg.seq_col].astype("string") if self.cfg.seq_col in df.columns else pd.Series([""] * len(df))
-            chunks = [seq_ser.iloc[i:i+chunk_rows].tolist() for i in range(0, len(seq_ser), chunk_rows)]
-            out_lists = [None] * len(chunks)
-
-            if len(chunks) == 1 or workers == 1:
-                for ci, chunk in enumerate(tqdm(chunks, desc="cache: seq", disable=not progress)):
-                    out_lists[ci] = _seq_worker((chunk, maxL, vocab))
-            else:
-                with ProcessPoolExecutor(max_workers=workers) as ex:
-                    futs = {ex.submit(_seq_worker, (chunks[i], maxL, vocab)): i for i in range(len(chunks))}
-                    for fut in tqdm(as_completed(futs), total=len(futs), desc="cache: seq", disable=not progress):
-                        out_lists[futs[fut]] = fut.result()
-            for ids in (x for chunk in out_lists for x in chunk):
-                self._seqs.append(torch.tensor(ids if ids else [0], dtype=torch.long))
-
-            # ---------- Target id (same hash choice as cats) ----------
-            tgt_col = self.cfg.target_feature if self.cfg.target_feature in df.columns else 'inventory_id'
-            if tgt_col in df.columns:
-                if hash_mode == "pandas":
-                    t_ids = _hash_series_pandas(df[tgt_col], B)
-                else:
-                    t_ids = _hash_series_fnv_parallel(df[tgt_col], B, workers, progress=False, chunk_rows=chunk_rows)
-            else:
-                t_ids = np.zeros(len(df), dtype=np.int64)
-            self._tgt = torch.tensor(t_ids, dtype=torch.long)
-
-            # ---------- Label ----------
-            if self.cfg.label_col in df.columns:
-                self._labels = torch.tensor(df[self.cfg.label_col].to_numpy(np.float32), dtype=torch.float32)
-            else:
-                self._labels = torch.tensor(np.full(len(df), -1.0, np.float32), dtype=torch.float32)
+            os.makedirs(self.cache_dir, exist_ok=True)
+            self._build_cache(df)
 
     def __len__(self):
         return len(self.df)
 
-    # Fallback encoders (no-cache path)
+    # --------- cache builders ----------
+    def _build_cache(self, df: pd.DataFrame):
+        N = len(df)
+
+        # 1) Categorical (pre-allocate, fill per column, free immediately)
+        B = self.cfg.category_hash_buckets
+        C = len(self.cats)
+        cat_mat = np.empty((N, C), dtype=np.int64) if C > 0 else np.zeros((N, 0), dtype=np.int64)
+        for j, c in enumerate(tqdm(self.cats, desc=f"cache: cats[{self.hash_mode}]", disable=not self.progress)):
+            if self.hash_mode == "pandas":
+                col = _hash_series_pandas(df[c], B)
+            else:
+                col = _hash_series_fnv_parallel(df[c], B, self.workers, self.chunk_rows, progress=False)
+            cat_mat[:, j] = col
+            del col
+            gc.collect()
+        self._cats = torch.from_numpy(cat_mat.copy()).long()
+        del cat_mat
+        gc.collect()
+
+        # 2) Numeric (pre-allocate, fill per column, free immediately)
+        F = len(self.nums)
+        num_mat = np.empty((N, F), dtype=np.float32) if F > 0 else np.zeros((N, 0), dtype=np.float32)
+        for j, c in enumerate(tqdm(self.nums, desc="cache: nums", disable=not self.progress)):
+            v = pd.to_numeric(df[c], errors='coerce').fillna(self.cfg.numeric_fillna).to_numpy(np.float32)
+            mu, sig = self.stats.get(c, (0.0, 1.0))
+            num_mat[:, j] = (v - mu) / (sig if sig else 1.0)
+            del v
+            gc.collect()
+        self._nums = torch.from_numpy(num_mat.copy()).float()
+        del num_mat
+        gc.collect()
+
+        # 3) Target id
+        tgt_col = self.cfg.target_feature if self.cfg.target_feature in df.columns else 'inventory_id'
+        if tgt_col in df.columns:
+            if self.hash_mode == "pandas":
+                t_ids = _hash_series_pandas(df[tgt_col], B)
+            else:
+                t_ids = _hash_series_fnv_parallel(df[tgt_col], B, self.workers, self.chunk_rows, progress=False)
+        else:
+            t_ids = np.zeros(N, dtype=np.int64)
+        self._tgt = torch.tensor(t_ids, dtype=torch.long)
+        del t_ids
+        gc.collect()
+
+        # 4) Labels
+        if self.cfg.label_col in df.columns:
+            self._labels = torch.tensor(df[self.cfg.label_col].to_numpy(np.float32), dtype=torch.float32)
+        else:
+            self._labels = torch.tensor(np.full(N, -1.0, np.float32), dtype=torch.float32)
+
+        # 5) Sequence → RAM list OR memmap ragged
+        if self.cache_backend == "ram":
+            self._build_seq_ram(df)
+        else:
+            self._build_seq_memmap(df)
+
+    def _build_seq_ram(self, df: pd.DataFrame):
+        # 소규모 데이터에만 권장(메모리 사용 큼)
+        self._seqs = []
+        vocab = self.cfg.seq_vocab_size
+        maxL = self.cfg.seq_max_len
+        seq_ser = df[self.cfg.seq_col].astype("string") if self.cfg.seq_col in df.columns else pd.Series([""] * len(df))
+        chunks = [seq_ser.iloc[i:i + self.chunk_rows].tolist() for i in range(0, len(seq_ser), self.chunk_rows)]
+        for chunk in tqdm(chunks, desc="cache: seq[ram]", disable=not self.progress):
+            lens, flat = _seq_parse_chunk(chunk, maxL, vocab)
+            off = 0
+            for L in lens:
+                ids = flat[off:off + L]
+                self._seqs.append(torch.tensor(ids if L > 0 else [0], dtype=torch.long))
+                off += L
+            del lens, flat
+            gc.collect()
+
+    def _build_seq_memmap(self, df: pd.DataFrame):
+        vocab = self.cfg.seq_vocab_size
+        maxL = self.cfg.seq_max_len
+        N = len(df)
+        seq_ser = df[self.cfg.seq_col].astype("string") if self.cfg.seq_col in df.columns else pd.Series([""] * N)
+
+        base = os.path.join(self.cache_dir, f"seq_{N}_L{maxL}_V{vocab}.")
+        path_len = base + "len.npy"
+        path_off = base + "off.npy"
+        path_dat = base + "dat.int32"
+
+        # 이미 생성된 경우: 바로 mmap
+        if os.path.exists(path_len) and os.path.exists(path_off) and os.path.exists(path_dat):
+            self._seq_len = np.load(path_len, mmap_mode='r')
+            self._seq_off = np.load(path_off, mmap_mode='r')
+            self._seq_dat = np.memmap(path_dat, dtype=np.int32, mode='r')
+            return
+
+        chunks = [(i, min(i + self.chunk_rows, N)) for i in range(0, N, self.chunk_rows)]
+
+        # -------- Pass 1: 길이만 스트리밍으로 기록 --------
+        seq_len_mm = open_memmap(path_len, mode='w+', dtype=np.int32, shape=(N,))
+        with ProcessPoolExecutor(max_workers=self.workers) as ex:
+            futs = {}
+            for (s, e) in chunks:
+                arr = seq_ser.iloc[s:e].tolist()
+                futs[ex.submit(_seq_parse_chunk, arr, maxL, vocab)] = (s, e)
+            for fut in tqdm(as_completed(futs), total=len(futs), desc="cache: seq(pass1 len)", disable=not self.progress):
+                (s, e) = futs[fut]
+                lens, _ = fut.result()
+                seq_len_mm[s:e] = lens
+                del lens
+                gc.collect()
+
+        # 오프셋 memmap 생성 및 cumsum (in-place)
+        seq_off_mm = open_memmap(path_off, mode='w+', dtype=np.int64, shape=(N + 1,))
+        seq_off_mm[0] = 0
+        np.cumsum(seq_len_mm, out=seq_off_mm[1:])
+        n_tokens = int(seq_off_mm[-1])
+
+        # Pass1 임시 메모리 해제
+        del seq_len_mm
+        gc.collect()
+
+        # -------- Pass 2: 토큰 flat을 해당 구간에 바로 쓰기 --------
+        seq_dat = np.memmap(path_dat, dtype=np.int32, mode='w+', shape=(n_tokens,))
+        with ProcessPoolExecutor(max_workers=self.workers) as ex:
+            futs = {}
+            for (s, e) in chunks:
+                arr = seq_ser.iloc[s:e].tolist()
+                futs[ex.submit(_seq_parse_chunk, arr, maxL, vocab)] = (s, e)
+            for fut in tqdm(as_completed(futs), total=len(futs), desc="cache: seq(pass2 write)", disable=not self.progress):
+                (s, e) = futs[fut]
+                lens, flat = fut.result()
+                a = int(seq_off_mm[s])  # 작은 슬라이스만 참조
+                b = int(seq_off_mm[e])
+                if flat.size:
+                    seq_dat[a:b] = flat
+                del lens, flat
+                gc.collect()
+        seq_dat.flush()
+
+        # 최종 read-only memmap 오픈
+        # (seq_off_mm은 이미 파일 기반이므로 그대로 읽기 전용으로 다시 로드)
+        del seq_off_mm
+        gc.collect()
+        self._seq_len = np.load(path_len, mmap_mode='r')
+        self._seq_off = np.load(path_off, mmap_mode='r')
+        self._seq_dat = np.memmap(path_dat, dtype=np.int32, mode='r')
+
+    # --------- encoders (no-cache fallback) ----------
     def _encode_cats(self, row) -> torch.Tensor:
         vals = []
         B = self.cfg.category_hash_buckets
         for c in self.cats:
             v = row[c]
-            if pd.isna(v):
-                vals.append(0)
-            else:
-                vals.append(1 + hash64(str(v), B-1))
+            vals.append(0 if pd.isna(v) else 1 + hash64(str(v), B - 1))
         return torch.tensor(vals, dtype=torch.long)
 
     def _encode_nums(self, row) -> torch.Tensor:
@@ -222,40 +323,54 @@ class CTRDataset(Dataset):
             mu, sig = self.stats.get(c, (0.0, 1.0))
             if pd.isna(v):
                 v = self.cfg.numeric_fillna
-            x = (float(v) - mu) / (sig if sig else 1.0)
-            xs.append(x)
+            xs.append((float(v) - mu) / (sig if sig else 1.0))
         return torch.tensor(xs, dtype=torch.float32)
 
     def _encode_seq(self, s) -> torch.Tensor:
-        toks = parse_seq_col(s, self.cfg.seq_max_len)
-        ids = [1 + hash64(tok, self.cfg.seq_vocab_size-1) for tok in toks]
-        if len(ids) == 0:
+        if not isinstance(s, str):
             return torch.zeros(1, dtype=torch.long)
+        toks = [t.strip() for t in s.split(',') if t.strip() != ""]
+        if self.cfg.seq_max_len > 0:
+            toks = toks[-self.cfg.seq_max_len:]
+        ids = [1 + hash64(tok, self.cfg.seq_vocab_size - 1) for tok in toks] or [0]
         return torch.tensor(ids, dtype=torch.long)
 
+    # --------- dataset API ----------
     def __getitem__(self, idx):
         if self.cache:
-            return self._cats[idx], self._nums[idx], self._seqs[idx], self._tgt[idx], self._labels[idx]
-        # fallback (no-cache)
+            cats = self._cats[idx]
+            nums = self._nums[idx]
+            tgt = self._tgt[idx]
+            lab = self._labels[idx]
+            if self.cache_backend == "ram":
+                seq = self._seqs[idx]
+            else:
+                a, b = int(self._seq_off[idx]), int(self._seq_off[idx + 1])
+                seq_np = self._seq_dat[a:b]  # view into memmap
+                seq = torch.from_numpy(np.array(seq_np, copy=True))  # copy to avoid holding file handle
+            return cats, nums, seq, tgt, lab
+
+        # fallback (no cache)
         row = self.df.iloc[idx]
         cats = self._encode_cats(row)
         nums = self._encode_nums(row)
-        seq = self._encode_seq(row.get(self.cfg.seq_col) if self.cfg.seq_col in self.df.columns else None)
-        tgt_val = row[self.cfg.target_feature] if self.cfg.target_feature in self.df.columns else row.get('inventory_id')
-        tgt_id = 1 + hash64(str(tgt_val), self.cfg.category_hash_buckets-1) if pd.notna(tgt_val) else 0
-        label = float(row[self.cfg.label_col]) if self.cfg.label_col in self.df.columns else -1.0
-        return cats, nums, seq, int(tgt_id), label
+        seq = self._encode_seq(row.get(self.cfg.seq_col))
+        tgtv = row[self.cfg.target_feature] if self.cfg.target_feature in self.df.columns else row.get('inventory_id')
+        tgt = 1 + hash64(str(tgtv), self.cfg.category_hash_buckets - 1) if pd.notna(tgtv) else 0
+        lab = float(row[self.cfg.label_col]) if self.cfg.label_col in self.df.columns else -1.0
+        return cats, nums, seq, int(tgt), lab
 
 
-# ============================
-# Collate & Dataloader builders
-# ============================
+# ----------------------------
+# Collate & Dataloaders
+# ----------------------------
 def _pad_sequences(seqs: List[torch.Tensor]) -> torch.Tensor:
     max_len = max(s.shape[0] for s in seqs)
     out = torch.zeros(len(seqs), max_len, dtype=torch.long)
     for i, s in enumerate(seqs):
         out[i, -len(s):] = s
     return out
+
 
 def collate_fn_train(batch, cfg):
     cats, nums, seqs, tgt_ids, labels = zip(*batch)
@@ -265,7 +380,7 @@ def collate_fn_train(batch, cfg):
     tgt_ids = torch.tensor(tgt_ids, dtype=torch.long)
     labels = torch.tensor(labels, dtype=torch.float32)
 
-    # in-batch negative downsampling (kept unbiased via weights in train loop)
+    # in-batch negative downsampling (train only)
     if cfg.use_neg_downsampling and (labels >= 0).all():
         pos_idx = (labels == 1)
         neg_idx = (labels == 0)
@@ -280,6 +395,7 @@ def collate_fn_train(batch, cfg):
         cats, nums, seq_pad, tgt_ids, labels = cats[keep], nums[keep], seq_pad[keep], tgt_ids[keep], labels[keep]
     return cats, nums, seq_pad, tgt_ids, labels
 
+
 def collate_fn_eval(batch, cfg):
     cats, nums, seqs, tgt_ids, labels = zip(*batch)
     cats = torch.stack(cats)
@@ -288,6 +404,11 @@ def collate_fn_eval(batch, cfg):
     tgt_ids = torch.tensor(tgt_ids, dtype=torch.long)
     labels = torch.tensor(labels, dtype=torch.float32)
     return cats, nums, seq_pad, tgt_ids, labels
+
+
+# Backward-compatibility: some scripts import `collate_fn` for eval/inference
+collate_fn = collate_fn_eval
+
 
 def make_dataloaders(train_df: pd.DataFrame, val_df: pd.DataFrame, cfg) -> Tuple[DataLoader, DataLoader, dict]:
     cats, nums = infer_feature_types(train_df, cfg.label_col, cfg.seq_col)
@@ -298,7 +419,7 @@ def make_dataloaders(train_df: pd.DataFrame, val_df: pd.DataFrame, cfg) -> Tuple
     cfg.d['num_stats'] = train_ds.stats  # pass stats to val/test
     val_ds = CTRDataset(val_df, cfg, cats, nums, is_train=False)
 
-    # DataLoader perf flags from config (Linux OK)
+    # DataLoader perf flags
     pw = bool(getattr(cfg, "persistent_workers", True)) and getattr(cfg, "num_workers", 0) > 0
     pf = getattr(cfg, "prefetch_factor", 8) if getattr(cfg, "num_workers", 0) > 0 else None
     pin = bool(getattr(cfg, "pin_memory", True))
