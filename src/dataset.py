@@ -87,6 +87,7 @@ class CTRDataset(Dataset):
         self.cats = cats
         self.nums = nums
         self.is_train = is_train
+        self.cache = bool(getattr(cfg, "dataset_cache", False))
 
         # stats for numeric standardization (fit on train, reuse for val/test)
         stats = {}
@@ -100,6 +101,53 @@ class CTRDataset(Dataset):
             self.stats = stats
         else:
             self.stats = getattr(cfg, 'num_stats', {})
+
+        # 3) 캐시 경로: 한 번만 벡터화/전처리하여 텐서로 보관
+        if self.cache:
+            # --- Categorical: hash bucket ---
+            cat_ids = []
+            B = self.cfg.category_hash_buckets
+            for c in self.cats:
+                v = df[c].astype("string").fillna("")        # NaN -> ""
+                # "" → 0 (pad), 그 외는 1..B 범위
+                ids = v.apply(lambda x: 0 if x == "" else 1 + hash64(x, B - 1)).to_numpy(np.int64)
+                cat_ids.append(ids)
+            self._cats = torch.tensor(np.stack(cat_ids, axis=1) if cat_ids else np.zeros((len(df), 0), np.int64),
+                                      dtype=torch.long)
+
+            # --- Numeric: z-score ---
+            xs = []
+            for c in self.nums:
+                v = pd.to_numeric(df[c], errors='coerce').fillna(self.cfg.numeric_fillna).to_numpy(np.float32)
+                mu, sig = self.stats.get(c, (0.0, 1.0))
+                xs.append((v - mu) / (sig if sig else 1.0))
+            self._nums = torch.tensor(np.stack(xs, axis=1) if xs else np.zeros((len(df), 0), np.float32),
+                                      dtype=torch.float32)
+
+            # --- Sequence: 각 행을 텐서로 저장(가변 길이) ---
+            self._seqs = []
+            maxL = self.cfg.seq_max_len
+            vocab = self.cfg.seq_vocab_size
+            seq_series = df[self.cfg.seq_col].astype("string") if self.cfg.seq_col in df.columns else pd.Series([""] * len(df))
+            for s in seq_series:
+                toks = [] if s is None or s != s else s.split(',')
+                if maxL > 0:
+                    toks = toks[-maxL:]
+                # pad 토큰=0, 실제 토큰=1..vocab 범위
+                ids = [1 + hash64(tok, vocab - 1) for tok in toks] if len(toks) > 0 else [0]
+                self._seqs.append(torch.tensor(ids, dtype=torch.long))
+
+            # --- Target id (target_feature 있으면 사용, 없으면 inventory_id로 폴백) ---
+            tgt_col = self.cfg.target_feature if self.cfg.target_feature in df.columns else 'inventory_id'
+            t_ser = df[tgt_col].astype("string").fillna("") if tgt_col in df.columns else pd.Series([""] * len(df))
+            t = t_ser.apply(lambda x: 1 + hash64(x, self.cfg.category_hash_buckets - 1) if x != "" else 0).to_numpy(np.int64)
+            self._tgt = torch.tensor(t, dtype=torch.long)
+
+            # --- Label (테스트셋이면 -1로 채움) ---
+            if self.cfg.label_col in df.columns:
+                self._labels = torch.tensor(df[self.cfg.label_col].to_numpy(np.float32), dtype=torch.float32)
+            else:
+                self._labels = torch.tensor(np.full(len(df), -1.0, np.float32), dtype=torch.float32)
 
         # pack tensors lazily in __getitem__ to avoid memory blow-up
 
@@ -135,16 +183,24 @@ class CTRDataset(Dataset):
             return torch.zeros(1, dtype=torch.long)  # at least 1 pad
         return torch.tensor(ids, dtype=torch.long)
 
+    # ====== __getitem__ ======
     def __getitem__(self, idx):
+        if self.cache:
+            # 캐시된 텐서들을 그대로 반환 (seq는 가변 길이 텐서 리스트)
+            return self._cats[idx], self._nums[idx], self._seqs[idx], self._tgt[idx], self._labels[idx]
+
+        # fallback: 행 단위 인코딩(기존 방식)
         row = self.df.iloc[idx]
         cats = self._encode_cats(row)
         nums = self._encode_nums(row)
-        seq = self._encode_seq(row.get(self.cfg.seq_col))
+        seq = self._encode_seq(row.get(self.cfg.seq_col) if self.cfg.seq_col in self.df.columns else None)
+
         if self.cfg.target_feature in self.df.columns:
             tgt_val = row[self.cfg.target_feature]
         else:
             tgt_val = row.get('inventory_id')
-        tgt_id = 1 + hash64(str(tgt_val), self.cfg.category_hash_buckets-1)
+        tgt_id = 1 + hash64(str(tgt_val), self.cfg.category_hash_buckets - 1) if pd.notna(tgt_val) else 0
+
         label = float(row[self.cfg.label_col]) if self.cfg.label_col in self.df.columns else -1.0
         return cats, nums, seq, int(tgt_id), label
 
