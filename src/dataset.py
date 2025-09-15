@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import pyarrow.parquet as pq
 import pyarrow as pa
+import os
 from typing import List, Dict, Tuple
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -9,19 +10,9 @@ from .utils import hash64
 from .data_schema import CAT_PATTERNS, EXCLUDE_COLS, match_any
 from types import SimpleNamespace
 from tqdm import tqdm
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pandas.util import hash_pandas_object
 
-class CollateWithCfg:
-    """Windows spawn에서 picklable한 collate_fn 래퍼"""
-    def __init__(self, use_neg_downsampling: bool, neg_downsample_ratio: float, min_pos_per_batch: int):
-        self.ns = SimpleNamespace(
-            use_neg_downsampling=use_neg_downsampling,
-            neg_downsample_ratio=neg_downsample_ratio,
-            min_pos_per_batch=min_pos_per_batch,
-        )
-
-    def __call__(self, batch):
-        # 기존 collate_fn을 그대로 재사용하되 cfg 대신 namesapce 주입
-        return collate_fn(batch, self.ns)
 
 class CTRFrame:
     """Lightweight loader around parquet with column pruning and type optimization."""
@@ -253,16 +244,6 @@ def make_dataloaders(train_df, val_df, cfg):
 
     val_ds = CTRDataset(val_df, cfg, cats, nums, is_train=False)
 
-    # train_collate = CollateWithCfg(
-    #     use_neg_downsampling=cfg.use_neg_downsampling,
-    #     neg_downsample_ratio=cfg.neg_downsample_ratio,
-    #     min_pos_per_batch=cfg.min_pos_per_batch,
-    # )
-    # val_collate = CollateWithCfg(   # 검증은 다운샘플 X
-    #     use_neg_downsampling=False,
-    #     neg_downsample_ratio=cfg.neg_downsample_ratio,
-    #     min_pos_per_batch=cfg.min_pos_per_batch,
-    # )
 
     train_loader = DataLoader(
         train_ds,
@@ -271,7 +252,6 @@ def make_dataloaders(train_df, val_df, cfg):
         num_workers=cfg.num_workers,
         pin_memory=cfg.pin_memory,
         collate_fn=lambda b: collate_fn(b, cfg),
-        # collate_fn=train_collate,
         drop_last=False,
         persistent_workers=cfg.persistent_workers,
         prefetch_factor=cfg.prefetch_factor
@@ -284,7 +264,6 @@ def make_dataloaders(train_df, val_df, cfg):
         num_workers=cfg.num_workers,
         pin_memory=cfg.pin_memory,
         collate_fn=lambda b: collate_fn(b, cfg),
-        # collate_fn=val_collate,
         drop_last=False,
         persistent_workers=cfg.persistent_workers,
         prefetch_factor=cfg.prefetch_factor
