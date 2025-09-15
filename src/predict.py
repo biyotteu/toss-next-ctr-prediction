@@ -10,12 +10,12 @@ from .models.qin_like import QINLike
 from .models.qin_v9ish import QINV9ish
 
 @torch.no_grad()
-def predict_main(cfg_path: str):
+def predict_main(cfg_path: str, ckpt_path: str = None):
     cfg = Cfg.load(cfg_path)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # load model
-    ckpt = os.path.join(cfg.output_dir, 'model_best.pt')
+    ckpt = ckpt_path or os.path.join(cfg.output_dir, 'model_best.pt')
     ck = torch.load(ckpt, map_location=device)
     cfg_loaded = Cfg(ck.get('cfg', cfg.d))
 
@@ -127,5 +127,6 @@ if __name__ == "__main__":
     import argparse
     p = argparse.ArgumentParser()
     p.add_argument('--cfg', type=str, default='./configs/config.yaml')
+    p.add_argument('--ckpt', type=str, default='./outputs/model_best.pt')
     args = p.parse_args()
-    predict_main(args.cfg)
+    predict_main(args.cfg, args.ckpt)

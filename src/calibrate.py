@@ -2,6 +2,7 @@ import os
 import json
 import numpy as np
 import torch
+from tqdm import tqdm
 
 from .config import Cfg
 from .logger import stage
@@ -80,7 +81,8 @@ def calibrate_main(cfg_path: str, ckpt_path: str = None, use_wll_override: bool 
     stage("Infer validation logits", 4, 4)
     val_logits, val_labels = [], []
     with torch.no_grad():
-        for cats, nums, seqs, tgt_ids, labels in val_loader:
+        tqdm_val_loader = tqdm(val_loader, desc="Infer validation logits", leave=True)
+        for cats, nums, seqs, tgt_ids, labels in tqdm_val_loader:
             cats = cats.to(device, non_blocking=True)
             nums = nums.to(device, non_blocking=True)
             seqs = seqs.to(device, non_blocking=True)
