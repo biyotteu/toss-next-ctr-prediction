@@ -1,10 +1,9 @@
 import os
 import json
 import numpy as np
-import pandas as pd
 import torch
+import shutil
 from torch.optim import AdamW
-from sklearn.model_selection import StratifiedShuffleSplit, GroupShuffleSplit
 from tqdm import tqdm
 try:
     import wandb
@@ -22,10 +21,13 @@ from .losses import weighted_bce_with_logits
 from .metrics import average_precision, weighted_logloss
 from .split import leakage_free_split
 from .calibration import TemperatureScaler
+from .utils import _pick_resume_path
 
 def train_main(cfg_path: str):
     cfg = Cfg.load(cfg_path)
+    cfg.output_dir = os.path.join(cfg.output_dir, cfg.exp_name)
     os.makedirs(cfg.output_dir, exist_ok=True)
+    shutil.copy(cfg_path, os.path.join(cfg.output_dir, 'config.yaml'))
     os.makedirs(cfg.artifacts_dir, exist_ok=True)
 
     # Initialize wandb if enabled and available
@@ -112,17 +114,41 @@ def train_main(cfg_path: str):
     pos_weight_t = torch.tensor([pos_weight], device=device)
     print(f"[INFO] Using pos_weight={float(pos_weight):.3f}")
 
+
+    # ADD (resume setup)
+    start_epoch = 1
+    best_wll = float('inf')
+    best_epoch = None
+    best_ckpt = None
+
+    # config에 아래 키가 있으면 사용합니다. 없으면 auto_resume=True로 동작
+    resume_from = getattr(cfg, 'resume_from', None)         # 명시 경로 (옵션)
+    auto_resume = bool(getattr(cfg, 'auto_resume', True))   # 기본 True
+
+    resume_path = _pick_resume_path(cfg.output_dir, resume_from) if (auto_resume or resume_from) else None
+    if resume_path:
+        ck = torch.load(resume_path, map_location=device)
+        model.load_state_dict(ck['model_state'])
+        if 'optim_state' in ck:
+            try:
+                optim.load_state_dict(ck['optim_state'])
+            except Exception as e:
+                print(f"[RESUME] optimizer state load failed: {e}")
+        start_epoch = ck.get('epoch', 0) + 1
+        best_wll   = ck.get('best_wll', float('inf'))
+        best_epoch = ck.get('best_epoch', None)
+        best_ckpt  = os.path.join(cfg.output_dir, "model_best.pt") if os.path.exists(os.path.join(cfg.output_dir, "model_best.pt")) else None
+        print(f"[RESUME] from {resume_path} → start_epoch={start_epoch}, best_wll={best_wll}")
+    else:
+        print("[RESUME] fresh training (no checkpoint found)")
     # 6) Train loop with optional Hard Negative Mining
     stage("Train", 6, 8)
-    best_wll = float('inf')
     best_model = None
-    best_epoch = None
     best_val_logits = None
     best_val_labels = None
     best_val_probs = None
-    best_ckpt = None
 
-    for epoch in range(1, cfg.epochs + 1):
+    for epoch in range(start_epoch, cfg.epochs + 1):
         model.train()
         losses = []
         
@@ -239,14 +265,19 @@ def train_main(cfg_path: str):
 
         # save checkpoint
         if cfg.save_every_epoch:
-            ckpt = os.path.join(cfg.output_dir, f"model_epoch{epoch}_wll{wll:.6f}.pt")
-            torch.save({
+            ckpt = os.path.join(cfg.output_dir, f"model_epoch{epoch}.pt")
+            state = {
                 'epoch': epoch,
                 'model_state': model.state_dict(),
                 'cfg': cfg.d,
-            }, ckpt)
-            print(f"[CKPT] saved to {ckpt}")
-        
+                'optim_state': optim.state_dict(),
+                'best_wll': best_wll,
+                'best_epoch': best_epoch,
+            }
+            torch.save(state, ckpt)
+            torch.save(state, os.path.join(cfg.output_dir, "model_latest.pt"))
+            print(f"[CKPT] saved to {ckpt} (and updated model_latest.pt)")
+                    
         # save best model
         if wll < best_wll:
             best_wll = wll
@@ -255,8 +286,15 @@ def train_main(cfg_path: str):
             best_val_logits = val_logits
             best_val_labels = val_labels
             best_val_probs = val_probs
-            best_ckpt = os.path.join(cfg.output_dir, f"model_best.pt")
-            torch.save({'model_state': best_model, 'cfg': cfg.d}, best_ckpt)
+            best_ckpt = os.path.join(cfg.output_dir, "model_best.pt")
+            torch.save({
+                'epoch': epoch,
+                'model_state': best_model,
+                'cfg': cfg.d,
+                'optim_state': optim.state_dict(),
+                'best_wll': best_wll,
+                'best_epoch': best_epoch,
+            }, best_ckpt)
             print(f"[CKPT] saved best to {best_ckpt}")
             
             # wandb에 최고 성능 메트릭 로깅
@@ -295,20 +333,9 @@ def train_main(cfg_path: str):
                 'calibrated/ap': ap_c,
                 'calibrated/wll': wll_c,
             })
-
-    # 8) Save final model
-    # stage("Save final", 8, 8)
-    # final = os.path.join(cfg.output_dir, "model_final.pt")
-    # torch.save({'model_state': model.state_dict(), 'cfg': cfg.d}, final)
-    # print(f"[DONE] saved final to {final}")
     
     # wandb 세션 종료
     if use_wandb:
-        # 모델 아티팩트 저장 (옵션)
-        # if cfg.wandb.get('log_model', False):
-        #     wandb.save(best_ckpt)
-        #     print(f"[WANDB] Model artifact saved: {best_ckpt}")
-        
         wandb.finish()
         print("[INFO] wandb session finished")
 

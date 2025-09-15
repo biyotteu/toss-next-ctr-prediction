@@ -1,5 +1,6 @@
 import numpy as np
 import torch, random, os
+import glob, re
 
 DEF_EPS = 1e-8
 
@@ -20,3 +21,22 @@ def hash64(x: str, buckets: int) -> int:
         h *= 1099511628211
         h &= 0xFFFFFFFFFFFFFFFF
     return int(h % buckets)
+
+# ADD
+def _extract_epoch_from_path(p: str) -> int:
+    m = re.search(r'model_epoch(\d+)', os.path.basename(p))
+    return int(m.group(1)) if m else -1
+
+def _pick_resume_path(output_dir: str, explicit: str = None) -> str | None:
+    # 우선순위: explicit → model_epoch*.pt 중 가장 최신 → model_latest.pt → model_best.pt → model_final.pt
+    if explicit and os.path.exists(explicit):
+        return explicit
+    candidates = glob.glob(os.path.join(output_dir, "model_epoch*.pt"))
+    if candidates:
+        candidates.sort(key=_extract_epoch_from_path)
+        return candidates[-1]
+    for name in ("model_latest.pt", "model_best.pt", "model_final.pt"):
+        p = os.path.join(output_dir, name)
+        if os.path.exists(p):
+            return p
+    return None
