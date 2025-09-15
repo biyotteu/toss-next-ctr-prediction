@@ -80,7 +80,7 @@ model:
   qnn_hidden: 256 # used in qin_like
   qnn_heads: 4 # used in qin_like
   dropout: 0.1
-  attn_dim: 256
+  attn_dim: 256 # 2 * embedding_dim
 
   # sparse target attention (qin_like)
   attn_topk: 30
@@ -112,3 +112,13 @@ pred_output_csv: ./outputs/submission.csv
 # =============================================
 log_interval: 100
 save_every_epoch: true
+
+# Weights & Biases (wandb) configuration
+wandb:
+  enabled: true
+  project: "ctr-prediction"  # wandb 프로젝트 이름
+  entity: null  # wandb 팀/사용자 이름 (null이면 개인 계정)
+  name: null  # 실험 이름 (null이면 자동 생성)
+  tags: ["qin", "ctr", "baseline"]  # 실험 태그들
+  notes: "QIN-based CTR prediction model"  # 실험 설명
+  log_model: false  # 모델 아티팩트 저장 여부

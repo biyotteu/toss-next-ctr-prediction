@@ -10,7 +10,7 @@ This project is **inspired by QIN** (Quadratic Interest Network). It implements 
 
 ## 1) Setup
 ```bash
-pip install torch pandas numpy pyarrow scikit-learn pyyaml tqdm
+pip install torch pandas numpy pyarrow scikit-learn pyyaml tqdm wandb
 ```
 
 ## 2) Data

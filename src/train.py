@@ -6,6 +6,11 @@ import torch
 from torch.optim import AdamW
 from sklearn.model_selection import StratifiedShuffleSplit, GroupShuffleSplit
 from tqdm import tqdm
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
 
 from .config import Cfg
 from .logger import stage, Timer
@@ -22,6 +27,30 @@ def train_main(cfg_path: str):
     cfg = Cfg.load(cfg_path)
     os.makedirs(cfg.output_dir, exist_ok=True)
     os.makedirs(cfg.artifacts_dir, exist_ok=True)
+
+    # Initialize wandb if enabled and available
+    use_wandb = False
+    if hasattr(cfg, 'wandb') and cfg.wandb.get('enabled', False) and WANDB_AVAILABLE:
+        use_wandb = True
+        wandb_config = cfg.wandb
+        
+        # wandb 실행 이름 생성 (설정되지 않은 경우)
+        run_name = wandb_config.get('name', None)
+        if run_name is None:
+            model_name = cfg.model.get('name', 'qin_like')
+            run_name = f"{cfg.exp_name}_{model_name}_lr{cfg.lr}_bs{cfg.batch_size}"
+        
+        wandb.init(
+            project=wandb_config.get('project', 'ctr-prediction'),
+            entity=wandb_config.get('entity', None),
+            name=run_name,
+            tags=wandb_config.get('tags', []),
+            notes=wandb_config.get('notes', ''),
+            config=cfg.d,  # 전체 설정을 wandb에 로깅
+        )
+        print(f"[INFO] Initialized wandb project: {wandb_config.get('project', 'ctr-prediction')}")
+    elif hasattr(cfg, 'wandb') and cfg.wandb.get('enabled', False) and not WANDB_AVAILABLE:
+        print("[WARNING] wandb is enabled in config but not installed. Install with: pip install wandb")
 
     timer = Timer()
     seed_all(cfg.seed)
@@ -166,6 +195,14 @@ def train_main(cfg_path: str):
             
             if i % cfg.log_interval == 0:
                 print(f"\n[E{epoch}] step={i}, loss={current_loss:.5f}")
+                
+                # wandb 로깅
+                if use_wandb:
+                    wandb.log({
+                        'train/loss': current_loss,
+                        'train/epoch': epoch,
+                        'train/step': (epoch - 1) * len(train_loader) + i,
+                    })
 
         # ---- Validation ----
         model.eval()
@@ -188,6 +225,16 @@ def train_main(cfg_path: str):
         ap = average_precision(val_labels, val_probs)
         wll = weighted_logloss(val_labels, val_probs)
         print(f"[VAL][E{epoch}] AP={ap:.6f}  WLL={wll:.6f}")
+        
+        # wandb 검증 메트릭 로깅
+        if use_wandb:
+            epoch_train_loss = np.mean(losses) if losses else 0.0
+            wandb.log({
+                'val/average_precision': ap,
+                'val/weighted_logloss': wll,
+                'train/epoch_loss': epoch_train_loss,
+                'epoch': epoch,
+            })
 
         # save checkpoint
         if cfg.save_every_epoch:
@@ -210,6 +257,14 @@ def train_main(cfg_path: str):
             best_ckpt = os.path.join(cfg.output_dir, f"model_best.pt")
             torch.save({'model_state': best_model, 'cfg': cfg.d}, best_ckpt)
             print(f"[CKPT] saved best to {best_ckpt}")
+            
+            # wandb에 최고 성능 메트릭 로깅
+            if use_wandb:
+                wandb.log({
+                    'best/wll': best_wll,
+                    'best/ap': ap,
+                    'best/epoch': best_epoch,
+                })
 
     # 7) Temperature scaling calibration on final val set
     if cfg.calibration.use_wll_weights:
@@ -225,17 +280,35 @@ def train_main(cfg_path: str):
             json.dump({'T': float(T)}, f)
         print(f"[CAL] learned temperature T={T:.4f} -> saved {cal_path}")
 
-    # report calibrated metrics
-    val_probs_cal = 1.0 / (1.0 + np.exp(-best_val_logits / T))
-    ap_c = average_precision(best_val_labels, val_probs_cal)
-    wll_c = weighted_logloss(best_val_labels, val_probs_cal)
-    print(f"[VAL][CAL] AP={ap_c:.6f}  WLL={wll_c:.6f}")
+        # report calibrated metrics
+        val_probs_cal = 1.0 / (1.0 + np.exp(-best_val_logits / T))
+        ap_c = average_precision(best_val_labels, val_probs_cal)
+        wll_c = weighted_logloss(best_val_labels, val_probs_cal)
+        print(f"[VAL][CAL] AP={ap_c:.6f}  WLL={wll_c:.6f}")
+        
+        # wandb에 calibration 결과 로깅
+        if use_wandb:
+            wandb.log({
+                'calibrated/temperature': float(T),
+                'calibrated/ap': ap_c,
+                'calibrated/wll': wll_c,
+            })
 
     # 8) Save final model
     # stage("Save final", 8, 8)
     # final = os.path.join(cfg.output_dir, "model_final.pt")
     # torch.save({'model_state': model.state_dict(), 'cfg': cfg.d}, final)
     # print(f"[DONE] saved final to {final}")
+    
+    # wandb 세션 종료
+    if use_wandb:
+        # 모델 아티팩트 저장 (옵션)
+        # if cfg.wandb.get('log_model', False):
+        #     wandb.save(best_ckpt)
+        #     print(f"[WANDB] Model artifact saved: {best_ckpt}")
+        
+        wandb.finish()
+        print("[INFO] wandb session finished")
 
 if __name__ == "__main__":
     import argparse
