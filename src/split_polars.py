@@ -16,7 +16,7 @@ def _stratified_split_pl(df: pl.DataFrame, label_col: str, val_ratio: float, see
         va_idx.append(cls_idx[cut:])
     tr_idx = np.concatenate(tr_idx) if tr_idx else np.array([], dtype=int)
     va_idx = np.concatenate(va_idx) if va_idx else np.array([], dtype=int)
-    return df.take(tr_idx).with_row_count(name=None), df.take(va_idx).with_row_count(name=None)
+    return df.gather(tr_idx), df.gather(va_idx)
 
 
 def _group_split_pl(df: pl.DataFrame, label_col: str, group_col: str, val_ratio: float, seed: int):
@@ -32,7 +32,7 @@ def _group_split_pl(df: pl.DataFrame, label_col: str, group_col: str, val_ratio:
     va_mask = ~tr_mask
     tr_idx = np.nonzero(tr_mask)[0]
     va_idx = np.nonzero(va_mask)[0]
-    return df.take(tr_idx).with_row_count(name=None), df.take(va_idx).with_row_count(name=None)
+    return df.gather(tr_idx), df.gather(va_idx)
 
 
 def _time_split_pl(df: pl.DataFrame, label_col: str, time_col: str, val_ratio: float):
@@ -43,7 +43,7 @@ def _time_split_pl(df: pl.DataFrame, label_col: str, time_col: str, val_ratio: f
     cut = int(df.height * (1 - val_ratio))
     tr_idx = order[:cut]
     va_idx = order[cut:]
-    return df.take(tr_idx).with_row_count(name=None), df.take(va_idx).with_row_count(name=None)
+    return df.gather(tr_idx), df.gather(va_idx)
 
 
 def leakage_free_split_pl(df: pl.DataFrame, cfg):
