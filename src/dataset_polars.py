@@ -12,6 +12,7 @@ from numpy.lib.format import open_memmap
 from .utils import hash64
 from .data_schema import CAT_PATTERNS, EXCLUDE_COLS, match_any
 from .dataset import collate_fn_train, collate_fn_eval
+from tqdm import tqdm
 
 
 def infer_feature_types_pl(df: pl.DataFrame, label_col: str, seq_col: str):
@@ -129,7 +130,7 @@ class CTRDatasetPolars(Dataset):
         else:
             # build per-column into memmap to minimize peak RAM
             cat_mm = open_memmap(path_cats32, mode='w+', dtype=np.int32, shape=(N, C))
-            for j, c in enumerate(self.cats):
+            for j, c in enumerate(tqdm(self.cats, desc="cache: cats[polars]", disable=not self.progress)):
                 col_np = df.select((pl.col(c).cast(pl.Utf8).fill_null("").hash().mod(B-1).cast(pl.Int64) + 1)).to_numpy().reshape(-1)
                 cat_mm[:, j] = col_np.astype(np.int32, copy=False)
                 del col_np
@@ -148,7 +149,7 @@ class CTRDatasetPolars(Dataset):
         else:
             # stream into memmap col-by-col
             num_mm = open_memmap(path_nums, mode='w+', dtype=np.float32, shape=(N, F))
-            for j, c in enumerate(self.nums):
+            for j, c in enumerate(tqdm(self.nums, desc="cache: nums", disable=not self.progress)):
                 mu, sig = self.stats.get(c, (0.0, 1.0))
                 expr = (pl.col(c).cast(pl.Float64).fill_nan(self.cfg.numeric_fillna).fill_null(self.cfg.numeric_fillna) - mu) / (sig if sig else 1.0)
                 col_np = df.select(expr.alias(c)).to_numpy().reshape(-1).astype(np.float32, copy=False)
@@ -210,7 +211,7 @@ class CTRDatasetPolars(Dataset):
         else:
             seq_ser = [""] * N
         chunk = self.chunk_rows
-        for s in range(0, N, chunk):
+        for s in tqdm(range(0, N, chunk), desc="cache: seq[ram]", disable=not self.progress):
             e = min(s + chunk, N)
             arr = seq_ser[s:e]
             lens, flat = _seq_parse_chunk(arr, maxL, vocab)
@@ -246,7 +247,7 @@ class CTRDatasetPolars(Dataset):
         chunks = [(i, min(i + self.chunk_rows, N)) for i in range(0, N, self.chunk_rows)]
 
         seq_len_mm = open_memmap(path_len, mode='w+', dtype=np.int32, shape=(N,))
-        for (s, e) in chunks:
+        for (s, e) in tqdm(chunks, desc="cache: seq(pass1 len)", disable=not self.progress):
             arr = seq_ser[s:e]
             lens, _ = _seq_parse_chunk(arr, maxL, vocab)
             seq_len_mm[s:e] = lens
@@ -259,7 +260,7 @@ class CTRDatasetPolars(Dataset):
         gc.collect()
 
         seq_dat = np.memmap(path_dat, dtype=np.int32, mode='w+', shape=(n_tokens,))
-        for (s, e) in chunks:
+        for (s, e) in tqdm(chunks, desc="cache: seq(pass2 write)", disable=not self.progress):
             arr = seq_ser[s:e]
             lens, flat = _seq_parse_chunk(arr, maxL, vocab)
             a = int(seq_off_mm[s])

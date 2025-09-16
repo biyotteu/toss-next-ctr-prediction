@@ -6,4 +6,4 @@
 # PyYAML>=6.0.1
 # tqdm>=4.64.0
 # wandb>=0.15.0
-polars>=0.20.0
+# polars>=0.20.0
