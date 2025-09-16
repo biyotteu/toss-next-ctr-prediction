@@ -91,38 +91,53 @@ class CTRDatasetPolars(Dataset):
         if self.cache:
             os.makedirs(self.cache_dir, exist_ok=True)
             self._build_cache(self.df)
+        else:
+            self.N = self.df.height
 
     def __len__(self):
-        return self.df.height
+        if self.df is not None:
+            return self.df.height
+        return getattr(self, 'N', 0)
 
     def _build_cache(self, df: pl.DataFrame):
         N = df.height
+        self.N = N
 
         B = self.cfg.category_hash_buckets
         C = len(self.cats)
         F = len(self.nums)
         part = self.partition
         base_ds = os.path.join(self.cache_dir, f"ds_{part}_{N}_C{C}_F{F}_B{B}_polars.")
-        path_cats = base_ds + "cats.int64.npy"
-        path_nums = base_ds + "nums.f32.npy"
-        path_tgt  = base_ds + "tgt.int64.npy"
-        path_lab  = base_ds + "labels.f32.npy"
+        path_cats32 = base_ds + "cats.int32.npy"
+        path_cats64 = base_ds + "cats.int64.npy"
+        path_nums   = base_ds + "nums.f32.npy"
+        path_tgt32  = base_ds + "tgt.int32.npy"
+        path_tgt64  = base_ds + "tgt.int64.npy"
+        path_lab    = base_ds + "labels.f32.npy"
 
         # 1) categorical
         if C == 0:
             self._cats = torch.zeros((N, 0), dtype=torch.long)
-        elif os.path.exists(path_cats):
-            arr = np.load(path_cats, mmap_mode='r')
-            self._cats = torch.from_numpy(np.array(arr, copy=True)).long()
+        elif os.path.exists(path_cats32) or os.path.exists(path_cats64):
+            pth = path_cats32 if os.path.exists(path_cats32) else path_cats64
+            arr = np.load(pth, mmap_mode='r')
+            # keep compact in RAM as int32; convert to long on access
+            arr_np = np.array(arr, copy=True)
+            if arr_np.dtype != np.int32:
+                arr_np = arr_np.astype(np.int32, copy=False)
+            self._cats = torch.from_numpy(arr_np).int()
         else:
-            exprs = []
-            for c in self.cats:
-                exprs.append(pl.col(c).cast(pl.Utf8).fill_null("").hash().mod(B-1).cast(pl.Int64) + 1)
-            cat_mat = df.select(exprs).to_numpy()
-            np.save(path_cats, cat_mat, allow_pickle=False)
-            self._cats = torch.from_numpy(cat_mat.copy()).long()
-            del cat_mat
+            # build per-column into memmap to minimize peak RAM
+            cat_mm = open_memmap(path_cats32, mode='w+', dtype=np.int32, shape=(N, C))
+            for j, c in enumerate(self.cats):
+                col_np = df.select((pl.col(c).cast(pl.Utf8).fill_null("").hash().mod(B-1).cast(pl.Int64) + 1)).to_numpy().reshape(-1)
+                cat_mm[:, j] = col_np.astype(np.int32, copy=False)
+                del col_np
+                gc.collect()
+            del cat_mm
             gc.collect()
+            arr = np.load(path_cats32, mmap_mode='r')
+            self._cats = torch.from_numpy(np.array(arr, copy=True)).int()
 
         # 2) numeric
         if F == 0:
@@ -131,30 +146,36 @@ class CTRDatasetPolars(Dataset):
             arr = np.load(path_nums, mmap_mode='r')
             self._nums = torch.from_numpy(np.array(arr, copy=True)).float()
         else:
-            exprs = []
-            for c in self.nums:
+            # stream into memmap col-by-col
+            num_mm = open_memmap(path_nums, mode='w+', dtype=np.float32, shape=(N, F))
+            for j, c in enumerate(self.nums):
                 mu, sig = self.stats.get(c, (0.0, 1.0))
                 expr = (pl.col(c).cast(pl.Float64).fill_nan(self.cfg.numeric_fillna).fill_null(self.cfg.numeric_fillna) - mu) / (sig if sig else 1.0)
-                exprs.append(expr.alias(c))
-            num_mat = df.select(exprs).to_numpy()
-            num_mat = num_mat.astype(np.float32, copy=False)
-            np.save(path_nums, num_mat, allow_pickle=False)
-            self._nums = torch.from_numpy(num_mat.copy()).float()
-            del num_mat
+                col_np = df.select(expr.alias(c)).to_numpy().reshape(-1).astype(np.float32, copy=False)
+                num_mm[:, j] = col_np
+                del col_np
+                gc.collect()
+            del num_mm
             gc.collect()
+            arr = np.load(path_nums, mmap_mode='r')
+            self._nums = torch.from_numpy(np.array(arr, copy=True)).float()
 
         # 3) target id
-        if os.path.exists(path_tgt):
-            arr = np.load(path_tgt, mmap_mode='r')
-            self._tgt = torch.from_numpy(np.array(arr, copy=True)).long()
+        if os.path.exists(path_tgt32) or os.path.exists(path_tgt64):
+            pth = path_tgt32 if os.path.exists(path_tgt32) else path_tgt64
+            arr = np.load(pth, mmap_mode='r')
+            arr_np = np.array(arr, copy=True)
+            if arr_np.dtype != np.int32:
+                arr_np = arr_np.astype(np.int32, copy=False)
+            self._tgt = torch.from_numpy(arr_np).int()
         else:
             tgt_col = self.cfg.target_feature if self.cfg.target_feature in df.columns else 'inventory_id'
             if tgt_col in df.columns:
-                t_ids = (df.select(pl.col(tgt_col).cast(pl.Utf8).fill_null("").hash().mod(B-1).cast(pl.Int64) + 1).to_numpy().reshape(-1))
+                t_ids = (df.select(pl.col(tgt_col).cast(pl.Utf8).fill_null("").hash().mod(B-1).cast(pl.Int64) + 1).to_numpy().reshape(-1)).astype(np.int32, copy=False)
             else:
-                t_ids = np.zeros(N, dtype=np.int64)
-            np.save(path_tgt, t_ids, allow_pickle=False)
-            self._tgt = torch.tensor(t_ids, dtype=torch.long)
+                t_ids = np.zeros(N, dtype=np.int32)
+            np.save(path_tgt32, t_ids, allow_pickle=False)
+            self._tgt = torch.from_numpy(t_ids.copy()).int()
             del t_ids
 
         # 4) labels
@@ -174,6 +195,9 @@ class CTRDatasetPolars(Dataset):
             self._build_seq_ram(df)
         else:
             self._build_seq_memmap(df)
+        # release original DataFrame memory as caches are ready
+        self.df = None
+        gc.collect()
 
     def _build_seq_ram(self, df: pl.DataFrame):
         self._seqs = []
@@ -252,9 +276,9 @@ class CTRDatasetPolars(Dataset):
 
     # expose tensor items like original dataset
     def __getitem__(self, idx):
-        cats = self._cats[idx]
+        cats = self._cats[idx].long()
         nums = self._nums[idx]
-        tgt = self._tgt[idx]
+        tgt = self._tgt[idx].long()
         lab = self._labels[idx]
         if hasattr(self, "_seqs"):
             seq = self._seqs[idx]
