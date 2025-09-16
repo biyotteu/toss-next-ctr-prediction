@@ -282,25 +282,40 @@ def train_main(cfg_path: str):
         # Validation
         model.eval()
         val_logits, val_probs, val_labels = [], [], []
-        # Stream validation to reduce peak memory; avoid big concatenations
+        # Stream validation to memmap to cap peak memory
         with torch.no_grad():
+            n_val = len(val_loader.dataset)
+            mm_dir = os.path.join(cfg.artifacts_dir, "_val_tmp")
+            os.makedirs(mm_dir, exist_ok=True)
+            mm_probs_path = os.path.join(mm_dir, "probs.f64")
+            mm_labels_path = os.path.join(mm_dir, "labels.i8")
+            mm_logits_path = os.path.join(mm_dir, "logits.f32") if cfg.calibration.use_wll_weights else None
+            mm_probs = np.memmap(mm_probs_path, dtype=np.float64, mode='w+', shape=(n_val,))
+            mm_labels = np.memmap(mm_labels_path, dtype=np.int8, mode='w+', shape=(n_val,))
+            mm_logits = np.memmap(mm_logits_path, dtype=np.float32, mode='w+', shape=(n_val,)) if mm_logits_path else None
+
+            write_ptr = 0
             val_pbar = tqdm(val_loader, desc=f'Validation Epoch {epoch}', leave=False)
             for cats, nums, seqs, tgt_ids, labels in val_pbar:
+                bsz = labels.shape[0]
                 cats = cats.to(device)
                 nums = nums.to(device)
                 seqs = seqs.to(device)
                 tgt_ids = tgt_ids.to(device)
                 logits = model(cats, nums, seqs, tgt_ids)
-                p = torch.sigmoid(logits).cpu().numpy()
-                val_probs.append(p)
-                val_logits.append(logits.detach().cpu().numpy())
-                val_labels.append(labels.numpy())
-                del logits, p, cats, nums, seqs, tgt_ids
+                probs = torch.sigmoid(logits).double().cpu().numpy()
+                mm_probs[write_ptr:write_ptr+bsz] = probs.reshape(-1)
+                mm_labels[write_ptr:write_ptr+bsz] = labels.numpy().astype(np.int8, copy=False)
+                if mm_logits is not None:
+                    mm_logits[write_ptr:write_ptr+bsz] = logits.detach().float().cpu().numpy().reshape(-1)
+                write_ptr += bsz
+                del logits, probs, cats, nums, seqs, tgt_ids
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-        val_probs = np.concatenate(val_probs, axis=0) if val_probs else np.array([])
-        val_logits = np.concatenate(val_logits, axis=0) if val_logits else np.array([])
-        val_labels = np.concatenate(val_labels, axis=0).astype(int) if val_labels else np.array([])
+
+        val_probs = np.asarray(mm_probs)
+        val_labels = np.asarray(mm_labels).astype(int)
+        val_logits = np.asarray(mm_logits) if (mm_logits_path is not None) else np.array([])
         ap = average_precision(val_labels, val_probs)
         wll = weighted_logloss(val_labels, val_probs)
         score = 0.5 * ap + 0.5 * (1.0 / (1.0 + wll))
