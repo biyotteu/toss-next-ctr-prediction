@@ -1,7 +1,7 @@
 # =============================================
 # Experiment / Paths
 # =============================================
-exp_name: qin_ctr_baseline
+exp_name: QIN_V9ISH_BASELINE
 seed: 42
 output_dir: ./outputs
 artifacts_dir: ./artifacts
@@ -24,7 +24,7 @@ seq_vocab_size: 400000 # hashing buckets for seq tokens
 force_drop_cols: [l_feat_20, l_feat_23]
 # Numeric/Category handling
 numeric_fillna: 0.0
-category_hash_buckets: 500000 # hashing trick buckets for generic categorical columns
+category_hash_buckets: 100000 # hashing trick buckets for generic categorical columns
 
 # =============================================
 # Split (leakage‑free options)
@@ -66,7 +66,7 @@ pin_memory: true
 dataset_cache: true               # 캐싱 켜기
 dataset_cache_progress: true      # tqdm 진행 표시
 dataset_cache_workers: 16         # 병렬 워커 수 (CPU 코어에 맞춰 조정)
-dataset_cache_chunk_rows: 500000  # 시퀀스 처리 청크 크기
+dataset_cache_chunk_rows: 1000000  # 시퀀스 처리 청크 크기
 dataset_cache_backend: "memmap"    # "memmap" | "ram"
 dataset_cache_dir: ./artifacts/cache_seq  # 캐시 저장 경로(영구 재사용)
 # 범주형 해시 방식 선택

@@ -152,18 +152,22 @@ class CTRDataset(Dataset):
             else:
                 self.partition = "val" if cfg.label_col in df.columns else "test"
 
-        # numeric z-scoring stats
+        # numeric z-scoring stats: use precomputed stats from cfg
+        # (stats must be provided via cfg.num_stats; no computation here)
+        raw_stats = getattr(cfg, 'num_stats', {})
+        # normalize format: accept {col: (mu, sig)} or {col: [mu, sig]} or {col: {"mu":, "sig":}}
         stats = {}
-        if is_train:
-            for c in nums:
-                v = pd.to_numeric(df[c], errors='coerce')
-                mu, sig = float(v.mean()), float(v.std(ddof=0))
-                if sig == 0 or np.isnan(sig):
-                    sig = 1.0
-                stats[c] = (mu, sig)
-            self.stats = stats
-        else:
-            self.stats = getattr(cfg, 'num_stats', {})
+        for c, v in raw_stats.items():
+            if isinstance(v, (list, tuple)) and len(v) >= 2:
+                mu, sig = float(v[0]), float(v[1])
+            elif isinstance(v, dict) and 'mu' in v and 'sig' in v:
+                mu, sig = float(v['mu']), float(v['sig'])
+            else:
+                continue
+            if sig == 0.0 or np.isnan(sig):
+                sig = 1.0
+            stats[c] = (mu, sig)
+        self.stats = stats
 
         # caching toggles
         self.cache = bool(getattr(cfg, "dataset_cache", False))
@@ -171,6 +175,7 @@ class CTRDataset(Dataset):
         self.cache_dir = str(getattr(cfg, "dataset_cache_dir", "./artifacts/cache_seq"))
         self.progress = bool(getattr(cfg, "dataset_cache_progress", True))
         self.workers = int(getattr(cfg, "dataset_cache_workers", max(1, (os.cpu_count() or 2) // 2)))
+        print(f"self.workers: {self.workers}")
         self.chunk_rows = int(getattr(cfg, "dataset_cache_chunk_rows", 200_000))
         self.hash_mode = str(getattr(cfg, "dataset_cache_hash", "fnv")).lower()  # "fnv" | "pandas"
 
@@ -211,8 +216,6 @@ class CTRDataset(Dataset):
                 else:
                     col = _hash_series_fnv_parallel(df[c], B, self.workers, self.chunk_rows, progress=False)
                 cat_mat[:, j] = col
-                del col
-                gc.collect()
             np.save(path_cats, cat_mat, allow_pickle=False)
             self._cats = torch.from_numpy(cat_mat.copy()).long()
             del cat_mat

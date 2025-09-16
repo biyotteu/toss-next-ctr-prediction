@@ -19,6 +19,18 @@ def predict_main(cfg_path: str, ckpt_path: str = None):
     ck = torch.load(ckpt, map_location=device)
     cfg_loaded = Cfg(ck.get('cfg', cfg.d))
 
+    # load precomputed numeric stats from artifacts if available
+    stats_path = os.path.join(cfg.artifacts_dir, 'num_stats.json')
+    num_stats = None
+    if os.path.exists(stats_path):
+        try:
+            with open(stats_path, 'r', encoding='utf-8') as f:
+                num_stats = json.load(f)
+            print(f"[NUM-STATS] loaded from {stats_path} (cols={len(num_stats)})")
+        except Exception as e:
+            print(f"[NUM-STATS] failed to load cached stats: {e}")
+    cfg_loaded.d.setdefault('num_stats', num_stats or cfg_loaded.d.get('num_stats', {}))
+
     # optional temperature
     T = 1.0
     cal_path = os.path.join(cfg.artifacts_dir, 'temperature.json')
@@ -35,9 +47,12 @@ def predict_main(cfg_path: str, ckpt_path: str = None):
     cats, nums = infer_feature_types(train_df_head, cfg.label_col, cfg.seq_col)
     cats = [c for c in cats if c not in set(cfg.force_drop_cols)]
     nums = [c for c in nums if c not in set(cfg.force_drop_cols)]
-    # remove target_feature from categorical features to match training pipeline
-    if getattr(cfg, 'target_feature', None) in cats:
-        cats = [c for c in cats if c != cfg.target_feature]
+    # remove target_feature from both cats and nums to match training pipeline
+    tgt_feat = getattr(cfg, 'target_feature', None)
+    if tgt_feat in cats:
+        cats = [c for c in cats if c != tgt_feat]
+    if tgt_feat in nums:
+        nums = [c for c in nums if c != tgt_feat]
 
     # build model
     model_name = cfg.model.get('name', 'qin_like')
