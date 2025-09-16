@@ -23,7 +23,7 @@ from .models.qin_like import QINLike
 from .models.qin_v9ish import QINV9ish
 from .losses import weighted_bce_with_logits
 from .metrics import average_precision, weighted_logloss
-from .split import leakage_free_split
+from .split_polars import leakage_free_split_pl
 from .calibration import TemperatureScaler
 from .utils import _pick_resume_path
 
@@ -103,25 +103,23 @@ def train_main(cfg_path: str):
 
     cfg.d['num_stats'] = num_stats
 
-    # 2) Leakage-free split (still on pandas path -> convert)
-    stage("Leakage-free split", 2, 8)
-    # For compatibility, use pandas-based splitter. Convert to pandas.
-    train_df_pd = train_pl.to_pandas()
-    train_part, val_part = leakage_free_split(train_df_pd, cfg)
-    del train_df_pd
-    gc.collect()
-    pos_rate = float(train_part[cfg.label_col].mean())
+    # 2) Leakage-free split (Polars)
+    stage("Leakage-free split (Polars)", 2, 8)
+    train_pl_part, val_pl_part = leakage_free_split_pl(train_pl, cfg)
+    pos_rate = float(train_pl_part.select(pl.col(cfg.label_col).cast(pl.Float64).mean()).to_series()[0])
     neg_pos_ratio = (1 - pos_rate) / max(pos_rate, 1e-8)
-    print(f"[INFO] Train={len(train_part)} Val={len(val_part)} pos_rate={pos_rate:.5f} neg/pos={neg_pos_ratio:.2f}")
-
-    # Convert partitions back to Polars
-    train_pl_part = pl.from_pandas(train_part)
-    val_pl_part = pl.from_pandas(val_part)
-    del train_part, val_part
-    gc.collect()
+    print(f"[INFO] Train={train_pl_part.height} Val={val_pl_part.height} pos_rate={pos_rate:.5f} neg/pos={neg_pos_ratio:.2f}")
 
     # 3) Dataloaders (Polars)
     stage("Build DataLoaders (Polars)", 3, 8)
+    # Dataloader tuning to reduce I/O stalls
+    # Suggest: smaller prefetch, optional fewer workers for WSL stability
+    if not hasattr(cfg, 'num_workers'):
+        cfg.d['num_workers'] = 2
+    if not hasattr(cfg, 'prefetch_factor'):
+        cfg.d['prefetch_factor'] = 2
+    if not hasattr(cfg, 'persistent_workers'):
+        cfg.d['persistent_workers'] = False
     train_loader, val_loader, input_dims = make_dataloaders_polars(train_pl_part, val_pl_part, cfg)
     del train_pl_part, val_pl_part
     gc.collect()
@@ -274,6 +272,7 @@ def train_main(cfg_path: str):
         # Validation
         model.eval()
         val_logits, val_probs, val_labels = [], [], []
+        # Stream validation to reduce peak memory; avoid big concatenations
         with torch.no_grad():
             val_pbar = tqdm(val_loader, desc=f'Validation Epoch {epoch}', leave=False)
             for cats, nums, seqs, tgt_ids, labels in val_pbar:
@@ -282,13 +281,16 @@ def train_main(cfg_path: str):
                 seqs = seqs.to(device)
                 tgt_ids = tgt_ids.to(device)
                 logits = model(cats, nums, seqs, tgt_ids)
-                probs = torch.sigmoid(logits).cpu().numpy()
-                val_probs.append(probs)
-                val_logits.append(logits.cpu().numpy())
+                p = torch.sigmoid(logits).cpu().numpy()
+                val_probs.append(p)
+                val_logits.append(logits.detach().cpu().numpy())
                 val_labels.append(labels.numpy())
-        val_probs = np.concatenate(val_probs)
-        val_logits = np.concatenate(val_logits)
-        val_labels = np.concatenate(val_labels).astype(int)
+                del logits, p, cats, nums, seqs, tgt_ids
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+        val_probs = np.concatenate(val_probs, axis=0) if val_probs else np.array([])
+        val_logits = np.concatenate(val_logits, axis=0) if val_logits else np.array([])
+        val_labels = np.concatenate(val_labels, axis=0).astype(int) if val_labels else np.array([])
         ap = average_precision(val_labels, val_probs)
         wll = weighted_logloss(val_labels, val_probs)
         score = 0.5 * ap + 0.5 * (1.0 / (1.0 + wll))

@@ -170,7 +170,33 @@ class CTRDatasetPolars(Dataset):
             self._labels = torch.tensor(labs, dtype=torch.float32)
 
         # 5) sequence: memmap two-pass (reuse python helper)
-        self._build_seq_memmap(df)
+        if self.cache_backend == "ram":
+            self._build_seq_ram(df)
+        else:
+            self._build_seq_memmap(df)
+
+    def _build_seq_ram(self, df: pl.DataFrame):
+        self._seqs = []
+        vocab = self.cfg.seq_vocab_size
+        maxL = self.cfg.seq_max_len
+        N = df.height
+        seq_col = self.cfg.seq_col
+        if seq_col in df.columns:
+            seq_ser = df.select(pl.col(seq_col).cast(pl.Utf8).fill_null("")).to_series().to_list()
+        else:
+            seq_ser = [""] * N
+        chunk = self.chunk_rows
+        for s in range(0, N, chunk):
+            e = min(s + chunk, N)
+            arr = seq_ser[s:e]
+            lens, flat = _seq_parse_chunk(arr, maxL, vocab)
+            off = 0
+            for L in lens:
+                ids = flat[off:off + L]
+                self._seqs.append(torch.tensor(ids if L > 0 else [0], dtype=torch.long))
+                off += L
+            del lens, flat
+            gc.collect()
 
     def _build_seq_memmap(self, df: pl.DataFrame):
         vocab = self.cfg.seq_vocab_size
@@ -230,9 +256,12 @@ class CTRDatasetPolars(Dataset):
         nums = self._nums[idx]
         tgt = self._tgt[idx]
         lab = self._labels[idx]
-        a, b = int(self._seq_off[idx]), int(self._seq_off[idx + 1])
-        seq_np = self._seq_dat[a:b]
-        seq = torch.from_numpy(np.array(seq_np, copy=True))
+        if hasattr(self, "_seqs"):
+            seq = self._seqs[idx]
+        else:
+            a, b = int(self._seq_off[idx]), int(self._seq_off[idx + 1])
+            seq_np = self._seq_dat[a:b]
+            seq = torch.from_numpy(np.array(seq_np, copy=True))
         return cats, nums, seq, tgt, lab
 
 
