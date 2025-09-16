@@ -228,37 +228,26 @@ class CTRDatasetPolars(Dataset):
 
         chunks = [(i, min(i + self.chunk_rows, N)) for i in range(0, N, self.chunk_rows)]
 
-        # Pass 1: compute lengths in parallel (pure RAM)
+        # Pass 1: compute lengths sequentially (pure RAM, OOM-safe)
         seq_len = np.empty(N, dtype=np.int32)
-        from concurrent.futures import ProcessPoolExecutor, as_completed
-        with ProcessPoolExecutor(max_workers=self.workers) as ex:
-            futs = {}
-            for (s, e) in chunks:
-                arr = seq_ser[s:e]
-                futs[ex.submit(_seq_parse_chunk, arr, maxL, vocab)] = (s, e)
-            for fut in tqdm(as_completed(futs), total=len(futs), desc="cache: seq(pass1 len)[ram]", disable=not self.progress):
-                (s, e) = futs[fut]
-                lens, _ = fut.result()
-                seq_len[s:e] = lens
+        for (s, e) in tqdm(chunks, desc="cache: seq(pass1 len)[ram]", disable=not self.progress):
+            arr = seq_ser[s:e]
+            lens, _ = _seq_parse_chunk(arr, maxL, vocab)
+            seq_len[s:e] = lens
         seq_off = np.empty(N + 1, dtype=np.int64)
         seq_off[0] = 0
         np.cumsum(seq_len, out=seq_off[1:])
         n_tokens = int(seq_off[-1])
 
-        # Pass 2: fill tokens in parallel (pure RAM)
+        # Pass 2: fill tokens sequentially (pure RAM)
         seq_dat = np.empty(n_tokens, dtype=np.int32)
-        with ProcessPoolExecutor(max_workers=self.workers) as ex:
-            futs = {}
-            for (s, e) in chunks:
-                arr = seq_ser[s:e]
-                futs[ex.submit(_seq_parse_chunk, arr, maxL, vocab)] = (s, e)
-            for fut in tqdm(as_completed(futs), total=len(futs), desc="cache: seq(pass2 write)[ram]", disable=not self.progress):
-                (s, e) = futs[fut]
-                lens, flat = fut.result()
-                a = int(seq_off[s])
-                b = int(seq_off[e])
-                if flat.size:
-                    seq_dat[a:b] = flat
+        for (s, e) in tqdm(chunks, desc="cache: seq(pass2 write)[ram]", disable=not self.progress):
+            arr = seq_ser[s:e]
+            lens, flat = _seq_parse_chunk(arr, maxL, vocab)
+            a = int(seq_off[s])
+            b = int(seq_off[e])
+            if flat.size:
+                seq_dat[a:b] = flat
         # assign RAM ragged arrays
         self._seq_len = seq_len
         self._seq_off = seq_off
@@ -299,16 +288,10 @@ class CTRDatasetPolars(Dataset):
         chunks = [(i, min(i + self.chunk_rows, N)) for i in range(0, N, self.chunk_rows)]
 
         seq_len_mm = open_memmap(path_len, mode='w+', dtype=np.int32, shape=(N,))
-        from concurrent.futures import ProcessPoolExecutor, as_completed
-        with ProcessPoolExecutor(max_workers=self.workers) as ex:
-            futs = {}
-            for (s, e) in chunks:
-                arr = seq_ser[s:e]
-                futs[ex.submit(_seq_parse_chunk, arr, maxL, vocab)] = (s, e)
-            for fut in tqdm(as_completed(futs), total=len(futs), desc="cache: seq(pass1 len)", disable=not self.progress):
-                (s, e) = futs[fut]
-                lens, _ = fut.result()
-                seq_len_mm[s:e] = lens
+        for (s, e) in tqdm(chunks, desc="cache: seq(pass1 len)", disable=not self.progress):
+            arr = seq_ser[s:e]
+            lens, _ = _seq_parse_chunk(arr, maxL, vocab)
+            seq_len_mm[s:e] = lens
         seq_off_mm = open_memmap(path_off, mode='w+', dtype=np.int64, shape=(N + 1,))
         seq_off_mm[0] = 0
         np.cumsum(seq_len_mm, out=seq_off_mm[1:])
@@ -318,18 +301,13 @@ class CTRDatasetPolars(Dataset):
         gc.collect()
 
         seq_dat = np.memmap(path_dat, dtype=np.int32, mode='w+', shape=(n_tokens,))
-        with ProcessPoolExecutor(max_workers=self.workers) as ex:
-            futs = {}
-            for (s, e) in chunks:
-                arr = seq_ser[s:e]
-                futs[ex.submit(_seq_parse_chunk, arr, maxL, vocab)] = (s, e)
-            for fut in tqdm(as_completed(futs), total=len(futs), desc="cache: seq(pass2 write)", disable=not self.progress):
-                (s, e) = futs[fut]
-                lens, flat = fut.result()
-                a = int(seq_off_mm[s])
-                b = int(seq_off_mm[e])
-                if flat.size:
-                    seq_dat[a:b] = flat
+        for (s, e) in tqdm(chunks, desc="cache: seq(pass2 write)", disable=not self.progress):
+            arr = seq_ser[s:e]
+            lens, flat = _seq_parse_chunk(arr, maxL, vocab)
+            a = int(seq_off_mm[s])
+            b = int(seq_off_mm[e])
+            if flat.size:
+                seq_dat[a:b] = flat
         seq_dat.flush()
 
         del seq_off_mm
