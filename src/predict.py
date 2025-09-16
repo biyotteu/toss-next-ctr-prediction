@@ -29,7 +29,13 @@ def predict_main(cfg_path: str, ckpt_path: str = None):
             print(f"[NUM-STATS] loaded from {stats_path} (cols={len(num_stats)})")
         except Exception as e:
             print(f"[NUM-STATS] failed to load cached stats: {e}")
-    cfg_loaded.d.setdefault('num_stats', num_stats or cfg_loaded.d.get('num_stats', {}))
+    # ensure dict type for num_stats on cfg_loaded
+    ns = num_stats or cfg_loaded.d.get('num_stats', {}) or {}
+    if not isinstance(ns, dict):
+        ns = getattr(ns, 'd', ns)
+    if not isinstance(ns, dict):
+        ns = {}
+    cfg_loaded.d['num_stats'] = ns
 
     # optional temperature
     T = 1.0

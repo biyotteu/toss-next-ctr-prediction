@@ -154,7 +154,12 @@ class CTRDataset(Dataset):
 
         # numeric z-scoring stats: use precomputed stats from cfg
         # (stats must be provided via cfg.num_stats; no computation here)
-        raw_stats = getattr(cfg, 'num_stats', {})
+        raw_stats = getattr(cfg, 'num_stats', {}) or {}
+        # Cfg 래퍼를 사용하는 경우 dict로 강제 변환
+        if not isinstance(raw_stats, dict):
+            raw_stats = getattr(raw_stats, 'd', raw_stats)
+        if not isinstance(raw_stats, dict):
+            raw_stats = {}
         # normalize format: accept {col: (mu, sig)} or {col: [mu, sig]} or {col: {"mu":, "sig":}}
         stats = {}
         for c, v in raw_stats.items():
