@@ -121,6 +121,7 @@ class CTRDatasetPolars(Dataset):
         if C == 0:
             self._cats = torch.zeros((N, 0), dtype=torch.long)
         elif os.path.exists(path_cats32) or os.path.exists(path_cats64):
+            print(f"Loading cached cats from {path_cats32} or {path_cats64}")
             pth = path_cats32 if os.path.exists(path_cats32) else path_cats64
             arr = np.load(pth, mmap_mode='r')
             # keep compact in RAM as int32; convert to long on access
@@ -145,6 +146,7 @@ class CTRDatasetPolars(Dataset):
         if F == 0:
             self._nums = torch.zeros((N, 0), dtype=torch.float32)
         elif os.path.exists(path_nums):
+            print(f"Loading cached nums from {path_nums}")
             arr = np.load(path_nums, mmap_mode='r')
             self._nums = torch.from_numpy(np.array(arr, copy=True)).float()
         else:
@@ -182,6 +184,7 @@ class CTRDatasetPolars(Dataset):
 
         # 4) labels
         if os.path.exists(path_lab):
+            print(f"Loading cached labels from {path_lab}")
             arr = np.load(path_lab, mmap_mode='r')
             self._labels = torch.from_numpy(np.array(arr, copy=True)).float()
         else:
