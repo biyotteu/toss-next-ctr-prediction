@@ -2,6 +2,15 @@ import numpy as np
 import polars as pl
 
 
+def _split_by_index_mask(df: pl.DataFrame, tr_idx: np.ndarray, va_idx: np.ndarray):
+    mask = np.zeros(df.height, dtype=bool)
+    if tr_idx.size:
+        mask[tr_idx] = True
+    tr_df = df.filter(pl.Series(mask))
+    va_df = df.filter(pl.Series(~mask))
+    return tr_df, va_df
+
+
 def _stratified_split_pl(df: pl.DataFrame, label_col: str, val_ratio: float, seed: int):
     rng = np.random.default_rng(seed)
     # compute per-class indices
@@ -16,7 +25,7 @@ def _stratified_split_pl(df: pl.DataFrame, label_col: str, val_ratio: float, see
         va_idx.append(cls_idx[cut:])
     tr_idx = np.concatenate(tr_idx) if tr_idx else np.array([], dtype=int)
     va_idx = np.concatenate(va_idx) if va_idx else np.array([], dtype=int)
-    return df.gather(tr_idx), df.gather(va_idx)
+    return _split_by_index_mask(df, tr_idx, va_idx)
 
 
 def _group_split_pl(df: pl.DataFrame, label_col: str, group_col: str, val_ratio: float, seed: int):
@@ -32,7 +41,7 @@ def _group_split_pl(df: pl.DataFrame, label_col: str, group_col: str, val_ratio:
     va_mask = ~tr_mask
     tr_idx = np.nonzero(tr_mask)[0]
     va_idx = np.nonzero(va_mask)[0]
-    return df.gather(tr_idx), df.gather(va_idx)
+    return _split_by_index_mask(df, tr_idx, va_idx)
 
 
 def _time_split_pl(df: pl.DataFrame, label_col: str, time_col: str, val_ratio: float):
@@ -43,7 +52,7 @@ def _time_split_pl(df: pl.DataFrame, label_col: str, time_col: str, val_ratio: f
     cut = int(df.height * (1 - val_ratio))
     tr_idx = order[:cut]
     va_idx = order[cut:]
-    return df.gather(tr_idx), df.gather(va_idx)
+    return _split_by_index_mask(df, tr_idx, va_idx)
 
 
 def leakage_free_split_pl(df: pl.DataFrame, cfg):
