@@ -35,6 +35,11 @@ def predict_main(cfg_path: str, ckpt_path: str = None):
     cats, nums = infer_feature_types(train_df_head, cfg.label_col, cfg.seq_col)
     cats = [c for c in cats if c not in set(cfg.force_drop_cols)]
     nums = [c for c in nums if c not in set(cfg.force_drop_cols)]
+    # exclude target_feature from cats/nums if present
+    tf = getattr(cfg, 'target_feature', None)
+    if tf:
+        cats = [c for c in cats if c != tf]
+        nums = [c for c in nums if c != tf]
 
     # build model
     model_name = cfg.model.get('name', 'qin_like')
@@ -64,8 +69,15 @@ def predict_main(cfg_path: str, ckpt_path: str = None):
     model.load_state_dict(ck['model_state'])
     model.eval()
 
-    # numeric stats from training
-    cfg_loaded.d.setdefault('num_stats', {})
+    # numeric stats: load from artifacts if available, else fallback to cfg
+    stats_path = os.path.join(cfg.artifacts_dir, 'num_stats.json')
+    if os.path.exists(stats_path):
+        with open(stats_path, 'r', encoding='utf-8') as f:
+            num_stats = json.load(f)
+        print(f"[STATS] Loaded numeric stats from {stats_path}")
+    else:
+        num_stats = cfg_loaded.d.get('num_stats', {})
+    cfg_loaded.d['num_stats'] = num_stats
 
     pf = test_frame.pf
     all_cols = [c for c in test_frame.all_cols if c not in set(cfg.force_drop_cols)]

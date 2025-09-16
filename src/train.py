@@ -1,6 +1,7 @@
 import os
 import json
 import numpy as np
+import pandas as pd
 import torch
 import shutil
 from torch.optim import AdamW
@@ -15,7 +16,7 @@ except ImportError:
 from .config import Cfg
 from .logger import stage, Timer
 from .utils import seed_all
-from .dataset import CTRFrame, make_dataloaders
+from .dataset import CTRFrame, make_dataloaders, infer_feature_types
 from .models.qin_like import QINLike
 from .models.qin_v9ish import QINV9ish
 from .losses import weighted_bce_with_logits
@@ -64,7 +65,32 @@ def train_main(cfg_path: str):
     train_frame = CTRFrame(cfg.paths.train_parquet, cfg.force_drop_cols)
     all_cols = [c for c in train_frame.all_cols if c not in set(cfg.force_drop_cols)]
     train_df = train_frame.read_all(columns=all_cols)
-
+    
+    # Numeric stats: load if exists, else compute on full dataframe and persist
+    stats_path = os.path.join(cfg.artifacts_dir, 'num_stats.json')
+    if os.path.exists(stats_path):
+        with open(stats_path, 'r', encoding='utf-8') as f:
+            num_stats = json.load(f)
+        print(f"[STATS] Loaded numeric stats from {stats_path}")
+    else:
+        cats_all, nums_all = infer_feature_types(train_df, cfg.label_col, cfg.seq_col)
+        nums_all = [c for c in nums_all if c not in set(cfg.force_drop_cols)]
+        tf = getattr(cfg, 'target_feature', None)
+        if tf:
+            nums_all = [c for c in nums_all if c != tf]
+        num_stats = {}
+        for c in nums_all:
+            v = pd.to_numeric(train_df[c], errors='coerce')
+            mu = float(v.mean())
+            sig = float(v.std(ddof=0))
+            if sig == 0 or np.isnan(sig):
+                sig = 1.0
+            num_stats[c] = [mu, sig]
+        with open(stats_path, 'w', encoding='utf-8') as f:
+            json.dump(num_stats, f)
+        print(f"[STATS] Computed numeric stats for {len(nums_all)} features -> {stats_path}")
+    cfg.d['num_stats'] = num_stats
+    
     # 2) Leakage-free split
     stage("Leakage-free split", 2, 8)
     train_part, val_part = leakage_free_split(train_df, cfg)

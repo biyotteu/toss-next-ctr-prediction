@@ -81,18 +81,8 @@ class CTRDataset(Dataset):
         self.is_train = is_train
         self.cache = bool(getattr(cfg, "dataset_cache", False))
 
-        # stats for numeric standardization (fit on train, reuse for val/test)
-        stats = {}
-        if is_train:
-            for c in nums:
-                v = pd.to_numeric(df[c], errors='coerce')
-                mu, sig = float(v.mean()), float(v.std(ddof=0))
-                if sig == 0 or np.isnan(sig):
-                    sig = 1.0
-                stats[c] = (mu, sig)
-            self.stats = stats
-        else:
-            self.stats = getattr(cfg, 'num_stats', {})
+        # numeric standardization stats should be precomputed and provided via cfg.num_stats
+        self.stats = getattr(cfg, 'num_stats', {})
 
         # 3) 캐시 경로: 한 번만 벡터화/전처리하여 텐서로 보관
         if self.cache:
@@ -237,10 +227,13 @@ def make_dataloaders(train_df, val_df, cfg):
     # force drop columns
     cats = [c for c in cats if c not in set(cfg.force_drop_cols)]
     nums = [c for c in nums if c not in set(cfg.force_drop_cols)]
+    # exclude target_feature from cats/nums
+    tf = getattr(cfg, 'target_feature', None)
+    if tf:
+        cats = [c for c in cats if c != tf]
+        nums = [c for c in nums if c != tf]
 
     train_ds = CTRDataset(train_df, cfg, cats, nums, is_train=True)
-    # stash numeric stats for val/test
-    cfg.d['num_stats'] = train_ds.stats
 
     val_ds = CTRDataset(val_df, cfg, cats, nums, is_train=False)
 

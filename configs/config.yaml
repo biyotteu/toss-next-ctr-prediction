@@ -19,7 +19,7 @@ seq_col: seq # comma‑separated ints as string
 # If l_feat_14 is missing or sparse, fallback will be inventory_id
 target_feature: l_feat_14
 seq_max_len: 256
-seq_vocab_size: 200000 # hashing buckets for seq tokens
+seq_vocab_size: 400000 # hashing buckets for seq tokens
 # Drop constants / bad cols (I/O optimization)
 force_drop_cols: [l_feat_20, l_feat_23]
 # Numeric/Category handling
