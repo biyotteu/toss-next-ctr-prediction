@@ -116,9 +116,12 @@ def train_main(cfg_path: str):
     # 2) Leakage-free split (Polars)
     stage("Leakage-free split (Polars)", 2, 8)
     train_pl_part, val_pl_part = leakage_free_split_pl(train_pl, cfg)
+    del train_pl
+    gc.collect()
     pos_rate = float(train_pl_part.select(pl.col(cfg.label_col).cast(pl.Float64).mean()).to_series()[0])
     neg_pos_ratio = (1 - pos_rate) / max(pos_rate, 1e-8)
     print(f"[INFO] Train={train_pl_part.height} Val={val_pl_part.height} pos_rate={pos_rate:.5f} neg/pos={neg_pos_ratio:.2f}")
+    
 
     # 3) Dataloaders (Polars)
     stage("Build DataLoaders (Polars)", 3, 8)
