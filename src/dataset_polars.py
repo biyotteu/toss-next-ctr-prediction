@@ -209,10 +209,7 @@ class CTRDatasetPolars(Dataset):
         maxL = self.cfg.seq_max_len
         N = df.height
         seq_col = self.cfg.seq_col
-        if seq_col in df.columns:
-            seq_ser = df.select(pl.col(seq_col).cast(pl.Utf8).fill_null("")).to_series().to_list()
-        else:
-            seq_ser = [""] * N
+        has_seq = seq_col in df.columns
 
         base = os.path.join(self.cache_dir, f"seq_{self.partition}_{N}_L{maxL}_V{vocab}.")
         path_len = base + "len.npy"
@@ -229,9 +226,13 @@ class CTRDatasetPolars(Dataset):
         chunks = [(i, min(i + self.chunk_rows, N)) for i in range(0, N, self.chunk_rows)]
 
         # Pass 1: compute lengths sequentially (pure RAM, OOM-safe)
+        print(f"Building sequence length in RAM")
         seq_len = np.empty(N, dtype=np.int32)
         for (s, e) in tqdm(chunks, desc="cache: seq(pass1 len)[ram]", disable=not self.progress):
-            arr = seq_ser[s:e]
+            if has_seq:
+                arr = df.slice(s, e - s).select(pl.col(seq_col).cast(pl.Utf8).fill_null("")).to_series().to_list()
+            else:
+                arr = [""] * (e - s)
             lens, _ = _seq_parse_chunk(arr, maxL, vocab)
             seq_len[s:e] = lens
         seq_off = np.empty(N + 1, dtype=np.int64)
@@ -242,7 +243,10 @@ class CTRDatasetPolars(Dataset):
         # Pass 2: fill tokens sequentially (pure RAM)
         seq_dat = np.empty(n_tokens, dtype=np.int32)
         for (s, e) in tqdm(chunks, desc="cache: seq(pass2 write)[ram]", disable=not self.progress):
-            arr = seq_ser[s:e]
+            if has_seq:
+                arr = df.slice(s, e - s).select(pl.col(seq_col).cast(pl.Utf8).fill_null("")).to_series().to_list()
+            else:
+                arr = [""] * (e - s)
             lens, flat = _seq_parse_chunk(arr, maxL, vocab)
             a = int(seq_off[s])
             b = int(seq_off[e])
@@ -269,10 +273,7 @@ class CTRDatasetPolars(Dataset):
         maxL = self.cfg.seq_max_len
         N = df.height
         seq_col = self.cfg.seq_col
-        if seq_col in df.columns:
-            seq_ser = df.select(pl.col(seq_col).cast(pl.Utf8).fill_null("")).to_series().to_list()
-        else:
-            seq_ser = [""] * N
+        has_seq = seq_col in df.columns
 
         base = os.path.join(self.cache_dir, f"seq_{self.partition}_{N}_L{maxL}_V{vocab}.")
         path_len = base + "len.npy"
@@ -289,7 +290,10 @@ class CTRDatasetPolars(Dataset):
 
         seq_len_mm = open_memmap(path_len, mode='w+', dtype=np.int32, shape=(N,))
         for (s, e) in tqdm(chunks, desc="cache: seq(pass1 len)", disable=not self.progress):
-            arr = seq_ser[s:e]
+            if has_seq:
+                arr = df.slice(s, e - s).select(pl.col(seq_col).cast(pl.Utf8).fill_null("")).to_series().to_list()
+            else:
+                arr = [""] * (e - s)
             lens, _ = _seq_parse_chunk(arr, maxL, vocab)
             seq_len_mm[s:e] = lens
         seq_off_mm = open_memmap(path_off, mode='w+', dtype=np.int64, shape=(N + 1,))
@@ -302,7 +306,10 @@ class CTRDatasetPolars(Dataset):
 
         seq_dat = np.memmap(path_dat, dtype=np.int32, mode='w+', shape=(n_tokens,))
         for (s, e) in tqdm(chunks, desc="cache: seq(pass2 write)", disable=not self.progress):
-            arr = seq_ser[s:e]
+            if has_seq:
+                arr = df.slice(s, e - s).select(pl.col(seq_col).cast(pl.Utf8).fill_null("")).to_series().to_list()
+            else:
+                arr = [""] * (e - s)
             lens, flat = _seq_parse_chunk(arr, maxL, vocab)
             a = int(seq_off_mm[s])
             b = int(seq_off_mm[e])
