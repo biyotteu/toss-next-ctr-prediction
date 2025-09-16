@@ -121,6 +121,7 @@ class CTRDatasetPolars(Dataset):
         if C == 0:
             self._cats = torch.zeros((N, 0), dtype=torch.long)
         elif os.path.exists(path_cats32) or os.path.exists(path_cats64):
+            print(f"Loading cats from {path_cats32} or {path_cats64}")
             pth = path_cats32 if os.path.exists(path_cats32) else path_cats64
             arr = np.load(pth, mmap_mode='r')
             # keep compact in RAM as int32; convert to long on access
@@ -145,6 +146,7 @@ class CTRDatasetPolars(Dataset):
         if F == 0:
             self._nums = torch.zeros((N, 0), dtype=torch.float32)
         elif os.path.exists(path_nums):
+            print(f"Loading nums from {path_nums}")
             arr = np.load(path_nums, mmap_mode='r')
             self._nums = torch.from_numpy(np.array(arr, copy=True)).float()
         else:
@@ -164,6 +166,7 @@ class CTRDatasetPolars(Dataset):
 
         # 3) target id
         if os.path.exists(path_tgt32) or os.path.exists(path_tgt64):
+            print(f"Loading tgt from {path_tgt32} or {path_tgt64}")
             pth = path_tgt32 if os.path.exists(path_tgt32) else path_tgt64
             arr = np.load(pth, mmap_mode='r')
             arr_np = np.array(arr, copy=True)
@@ -182,6 +185,7 @@ class CTRDatasetPolars(Dataset):
 
         # 4) labels
         if os.path.exists(path_lab):
+            print(f"Loading labels from {path_lab}")
             arr = np.load(path_lab, mmap_mode='r')
             self._labels = torch.from_numpy(np.array(arr, copy=True)).float()
         else:
@@ -218,6 +222,9 @@ class CTRDatasetPolars(Dataset):
 
         # If existing memmap cache is present, reuse directly to avoid rebuild
         if os.path.exists(path_len) and os.path.exists(path_off) and os.path.exists(path_dat):
+            print(f"Loading seq len from {path_len}")
+            print(f"Loading seq off from {path_off}")
+            print(f"Loading seq dat from {path_dat}")
             self._seq_len = np.load(path_len, mmap_mode='r')
             self._seq_off = np.load(path_off, mmap_mode='r')
             self._seq_dat = np.memmap(path_dat, dtype=np.int32, mode='r')
@@ -288,6 +295,9 @@ class CTRDatasetPolars(Dataset):
         path_dat = base + "dat.int32"
 
         if os.path.exists(path_len) and os.path.exists(path_off) and os.path.exists(path_dat):
+            print(f"Loading seq len from {path_len}")
+            print(f"Loading seq off from {path_off}")
+            print(f"Loading seq dat from {path_dat}")
             self._seq_len = np.load(path_len, mmap_mode='r')
             self._seq_off = np.load(path_off, mmap_mode='r')
             self._seq_dat = np.memmap(path_dat, dtype=np.int32, mode='r')
