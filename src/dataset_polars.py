@@ -210,10 +210,7 @@ class CTRDatasetPolars(Dataset):
         maxL = self.cfg.seq_max_len
         N = df.height
         seq_col = self.cfg.seq_col
-        if seq_col in df.columns:
-            seq_ser = df.select(pl.col(seq_col).cast(pl.Utf8).fill_null("")).to_series().to_list()
-        else:
-            seq_ser = [""] * N
+        has_seq = seq_col in df.columns
 
         base = os.path.join(self.cache_dir, f"seq_{self.partition}_{N}_L{maxL}_V{vocab}.")
         path_len = base + "len.npy"
@@ -238,7 +235,10 @@ class CTRDatasetPolars(Dataset):
         with ProcessPoolExecutor(max_workers=self.workers) as ex:
             futs = {}
             for (s, e) in chunks:
-                arr = seq_ser[s:e]
+                if has_seq:
+                    arr = df.slice(s, e - s).select(pl.col(seq_col).cast(pl.Utf8).fill_null("")).to_series().to_list()
+                else:
+                    arr = [""] * (e - s)
                 futs[ex.submit(_seq_parse_chunk, arr, maxL, vocab)] = (s, e)
             for fut in tqdm(as_completed(futs), total=len(futs), desc="cache: seq(pass1 len)[ram]", disable=not self.progress):
                 (s, e) = futs[fut]
@@ -254,7 +254,10 @@ class CTRDatasetPolars(Dataset):
         with ProcessPoolExecutor(max_workers=self.workers) as ex:
             futs = {}
             for (s, e) in chunks:
-                arr = seq_ser[s:e]
+                if has_seq:
+                    arr = df.slice(s, e - s).select(pl.col(seq_col).cast(pl.Utf8).fill_null("")).to_series().to_list()
+                else:
+                    arr = [""] * (e - s)
                 futs[ex.submit(_seq_parse_chunk, arr, maxL, vocab)] = (s, e)
             for fut in tqdm(as_completed(futs), total=len(futs), desc="cache: seq(pass2 write)[ram]", disable=not self.progress):
                 (s, e) = futs[fut]
