@@ -377,7 +377,6 @@ def make_dataloaders_polars(train_df: pl.DataFrame, val_df: pl.DataFrame, cfg) -
         cats = [c for c in cats if c != tgt_feat]
 
     train_ds = CTRDatasetPolars(train_df, cfg, cats, nums, is_train=True, partition="train")
-    cfg.d['num_stats'] = train_ds.stats
     val_ds = CTRDatasetPolars(val_df, cfg, cats, nums, is_train=False, partition="val")
 
     pw = bool(getattr(cfg, "persistent_workers", True)) and getattr(cfg, "num_workers", 0) > 0

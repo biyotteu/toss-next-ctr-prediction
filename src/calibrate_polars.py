@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 from .config import Cfg
 from .logger import stage
-from .dataset_polars import make_dataloaders_polars
+from .dataset_polars import make_dataloaders_polars, infer_feature_types_pl
 from .split_polars import leakage_free_split_pl
 from .models.qin_like import QINLike
 from .models.qin_v9ish import QINV9ish
@@ -36,6 +36,48 @@ def calibrate_main(cfg_path: str, ckpt_path: str = None, use_wll_override: bool 
     train_pl, val_pl = leakage_free_split_pl(full_pl, cfg)
     if val_pl.height == 0:
         raise RuntimeError("Validation split is empty. Adjust split config (val_ratio/time_val_ratio).")
+
+    # 2) Ensure numeric stats are available on cfg
+    stats_path = os.path.join(cfg.artifacts_dir, 'num_stats.json')
+    num_stats = None
+    if os.path.exists(stats_path):
+        try:
+            with open(stats_path, 'r', encoding='utf-8') as f:
+                num_stats = json.load(f)
+            print(f"[NUM-STATS] loaded from {stats_path} (cols={len(num_stats)})")
+        except Exception as e:
+            print(f"[NUM-STATS] failed to load cached stats, will recompute: {e}")
+            num_stats = None
+    if num_stats is None:
+        cats_all, nums_all = infer_feature_types_pl(train_pl, cfg.label_col, cfg.seq_col)
+        cats_all = [c for c in cats_all if c not in set(cfg.force_drop_cols)]
+        nums_all = [c for c in nums_all if c not in set(cfg.force_drop_cols)]
+        num_stats = {}
+        if len(nums_all) > 0:
+            stat_df = train_pl.select([pl.col(c).cast(pl.Float64).alias(c) for c in nums_all]).describe()
+            stat_col = "stat" if "stat" in stat_df.columns else ("statistic" if "statistic" in stat_df.columns else None)
+            if stat_col is None:
+                mean_row = train_pl.select([pl.col(c).cast(pl.Float64).mean().alias(c) for c in nums_all]).to_dicts()[0]
+                std_row = train_pl.select([pl.col(c).cast(pl.Float64).std().alias(c) for c in nums_all]).to_dicts()[0]
+            else:
+                rows = stat_df.to_dicts()
+                mean_row = next((d for d in rows if d.get(stat_col) in ("mean", "avg", "average")), {})
+                std_row  = next((d for d in rows if d.get(stat_col) in ("std", "std_dev", "stddev", "std dev")), {})
+                if stat_col in mean_row:
+                    mean_row = {k: v for k, v in mean_row.items() if k != stat_col}
+                if stat_col in std_row:
+                    std_row = {k: v for k, v in std_row.items() if k != stat_col}
+            for c in nums_all:
+                mu = float(mean_row.get(c, 0.0))
+                sig = float(std_row.get(c, 1.0))
+                if sig == 0.0 or np.isnan(sig):
+                    sig = 1.0
+                num_stats[c] = [mu, sig]
+        os.makedirs(cfg.artifacts_dir, exist_ok=True)
+        with open(stats_path, 'w', encoding='utf-8') as f:
+            json.dump(num_stats, f)
+        print(f"[NUM-STATS] computed via Polars and saved to {stats_path} (cols={len(num_stats)})")
+    cfg.d['num_stats'] = num_stats
 
     # 2) Dataloaders (fit train stats; val has NO downsampling)
     train_loader, val_loader, input_dims = make_dataloaders_polars(train_pl, val_pl, cfg)
