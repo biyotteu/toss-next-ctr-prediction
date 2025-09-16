@@ -211,6 +211,18 @@ class CTRDatasetPolars(Dataset):
         else:
             seq_ser = [""] * N
 
+        base = os.path.join(self.cache_dir, f"seq_{self.partition}_{N}_L{maxL}_V{vocab}.")
+        path_len = base + "len.npy"
+        path_off = base + "off.npy"
+        path_dat = base + "dat.int32"
+
+        # If existing memmap cache is present, reuse directly to avoid rebuild
+        if os.path.exists(path_len) and os.path.exists(path_off) and os.path.exists(path_dat):
+            self._seq_len = np.load(path_len, mmap_mode='r')
+            self._seq_off = np.load(path_off, mmap_mode='r')
+            self._seq_dat = np.memmap(path_dat, dtype=np.int32, mode='r')
+            return
+
         chunks = [(i, min(i + self.chunk_rows, N)) for i in range(0, N, self.chunk_rows)]
 
         # Pass 1: compute lengths in parallel (pure RAM)
@@ -248,6 +260,17 @@ class CTRDatasetPolars(Dataset):
         self._seq_len = seq_len
         self._seq_off = seq_off
         self._seq_dat = seq_dat
+
+        # persist to cache files for reuse on next run
+        try:
+            np.save(path_len, seq_len, allow_pickle=False)
+            np.save(path_off, seq_off, allow_pickle=False)
+            dat_mm = np.memmap(path_dat, dtype=np.int32, mode='w+', shape=(n_tokens,))
+            dat_mm[:] = seq_dat[:]
+            dat_mm.flush()
+            del dat_mm
+        except Exception:
+            pass
 
     def _build_seq_memmap(self, df: pl.DataFrame):
         vocab = self.cfg.seq_vocab_size
