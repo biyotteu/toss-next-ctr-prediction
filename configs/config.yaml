@@ -65,8 +65,8 @@ pin_memory: true
 # Dataset cache acceleration
 dataset_cache: true               # 캐싱 켜기
 dataset_cache_progress: true      # tqdm 진행 표시
-dataset_cache_workers: 2         # 병렬 워커 수 (CPU 코어에 맞춰 조정)
-dataset_cache_chunk_rows: 200000  # 시퀀스 처리 청크 크기
+dataset_cache_workers: 16         # 병렬 워커 수 (CPU 코어에 맞춰 조정)
+dataset_cache_chunk_rows: 400000  # 시퀀스 처리 청크 크기
 dataset_cache_backend: "ram"    # "memmap" | "ram"
 dataset_cache_dir: ./artifacts/cache_seq  # 캐시 저장 경로(영구 재사용)
 # 범주형 해시 방식 선택
