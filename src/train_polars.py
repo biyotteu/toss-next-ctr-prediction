@@ -87,16 +87,26 @@ def train_main(cfg_path: str):
         num_stats = {}
         if len(nums_all) > 0:
             stat_df = train_pl.select([pl.col(c).cast(pl.Float64).alias(c) for c in nums_all]).describe()
-            # Polars describe has rows: [count, null_count, mean, std, min, 25%, 50%, 75%, max]
-            # build dict with mean and std
-            mean_row = stat_df.filter(pl.col("stat") == "mean").drop("stat").to_dicts()[0]
-            std_row = stat_df.filter(pl.col("stat") == "std").drop("stat").to_dicts()[0]
+            stat_col = "stat" if "stat" in stat_df.columns else ("statistic" if "statistic" in stat_df.columns else None)
+            if stat_col is None:
+                # Fallback: compute directly without describe
+                mean_row = train_pl.select([pl.col(c).cast(pl.Float64).mean().alias(c) for c in nums_all]).to_dicts()[0]
+                std_row = train_pl.select([pl.col(c).cast(pl.Float64).std().alias(c) for c in nums_all]).to_dicts()[0]
+            else:
+                rows = stat_df.to_dicts()
+                mean_row = next((d for d in rows if d.get(stat_col) in ("mean", "avg", "average")), {})
+                std_row  = next((d for d in rows if d.get(stat_col) in ("std", "std_dev", "stddev", "std dev")), {})
+                if stat_col in mean_row:
+                    mean_row = {k: v for k, v in mean_row.items() if k != stat_col}
+                if stat_col in std_row:
+                    std_row = {k: v for k, v in std_row.items() if k != stat_col}
             for c in nums_all:
                 mu = float(mean_row.get(c, 0.0))
                 sig = float(std_row.get(c, 1.0))
                 if sig == 0.0 or np.isnan(sig):
                     sig = 1.0
                 num_stats[c] = [mu, sig]
+            del stat_df, mean_row, std_row
         with open(stats_path, 'w', encoding='utf-8') as f:
             json.dump(num_stats, f)
         print(f"[NUM-STATS] computed via Polars and saved to {stats_path} (cols={len(num_stats)})")
