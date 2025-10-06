@@ -1,0 +1,1 @@
+python -m src.infer --cfg cfgs/dare_qnn_next.yaml

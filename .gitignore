@@ -1,5 +1,3 @@
-outputs
-data
-test.ipynb
-**/_pycache_**
-artifacts
+runs/*
+cache/*
+**/__pycache__/**

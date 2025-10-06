@@ -1,0 +1,1 @@
+python -m src.train --cfg cfgs/dare_qnn_next.yaml

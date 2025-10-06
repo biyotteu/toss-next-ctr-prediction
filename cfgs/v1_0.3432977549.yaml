@@ -1,0 +1,103 @@
+exp_name: "dare_qnn"
+seed: 777
+device: "cuda"
+deterministic: true           # 완전 재현 모드 (AMP/compile 비권장)
+amp: "none"                   # none | bf16 | fp16  (재현성 엄격: none 권장)
+use_compile: false            # true면 torch.compile; 재현성엔 off 권장
+
+data:
+  train_path: "/home/biyotteu/dev/toss_v5/data/train.parquet"
+  test_path: "/home/biyotteu/dev/toss_v5/data/test.parquet"
+  cache_dir: "./cache/dare_qnn"
+  use_cache: true
+  chunked_build: true
+  shard_rows: 2000000         # 샤드 당 행수(대용량 전처리용)
+  add_isna_mask: true
+  impute_strategy: "median"    # median|zero
+  cat_cols: ["gender","age_group","inventory_id","day_of_week","hour","l_feat_14"]
+  hash_buckets:
+    gender: 16
+    age_group: 64
+    day_of_week: 8
+    hour: 32
+    inventory_id: 2000000
+    l_feat_14: 1000000
+  num_patterns: ["feat_*","history_*","l_feat_*"]
+  manifest_train: "./cache/dare_qnn/train/manifest.json"
+  manifest_test:  "./cache/dare_qnn/test/manifest.json"
+
+sequence:
+  col: "seq"
+  max_len: 600
+  pad_id: 0
+  top_k: 80
+  recency_tau: 256
+  query_mode: "concat"        # S1|S2|concat  (config로 토글)
+  query_key: "inventory_id"   # S1/concat일 때 타깃키
+  transformer_block: true
+  tfm:
+    n_layers: 3
+    n_heads: 8
+    mha_dropout: 0.1
+    ffn_hidden: 384
+    ffn_dropout: 0.1
+    norm: "rms"               # layernorm|rms
+    gating: "softmax"         # softmax|relu (집약 가중)
+    add_positional_bias: true
+
+model:
+  emb_dim: 64
+  dare_dropout: 0.1
+  qnn_alpha:
+    enabled: true
+    # 상세형
+    feature_embed_dim: 32     # 연속/마스크를 피처 임베딩(F,D)로 투사할 때의 D
+    heads: 8
+    rank: 32
+    proj_dim: 256
+    mlp_hidden: [512,256]
+    dropout: 0.1
+    use_se: true              # Squeeze-Excite 채널 리웨이트
+    se_reduction: 8
+    use_residual: true
+    norm: "rms"               # layernorm|rms
+    pair_grouping: "all"    # all|block(연속/카테고리 블록별 KR 상호작용)
+    aux_head_weight: 0.1      # DARE-only 보조로스(자기엔상블) 가중치
+
+train:
+  batch_size: 8192
+  epochs: 10
+  optimizer: "adamw"
+  lr: 0.001
+  weight_decay: 0.0001
+  warmup_epochs: 1
+  cosine: true
+  early_stop_patience: 3
+  grad_clip_norm: 1.0
+
+cv:
+  n_splits: 5
+  group_key: "inventory_id"
+  stratify_target: "clicked"
+
+eval:
+  monitor: "score"            # 0.5*AP + 0.5*WLL
+  maximize: true
+
+calibration:
+  enabled: true               # fold val에서 temperature scaling
+  method: "temperature"       # temperature | isotonic
+  lr: 0.05
+  iters: 200
+
+logging:
+  log_dir: "./runs"
+  tb: true
+  csv_log: true
+  verbose_steps: 100
+
+ensemble:
+  method: "logit_mean"   # mean | logit_mean | geom_mean | median | trim_mean | rank_avg | val_weighted | weighted | stacked
+  trim_ratio: 0.2        # trim_mean에서 앞뒤 절사 비율 (0~0.45)
+  weights: []            # method=weighted일 때 수동 가중치 [w1,w2,...] 합=1
+  val_weight_temperature: 10.0  # method=val_weighted: 소프트맥스 온도(가중치 평활)

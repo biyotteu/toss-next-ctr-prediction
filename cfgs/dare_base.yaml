@@ -1,0 +1,72 @@
+exp_name: "dare_base"
+seed: 777
+device: "cuda"
+deterministic: true           # 완전 재현 모드 (AMP/compile 비권장)
+amp: "none"                   # none | bf16 | fp16  (재현성 엄격: none 권장)
+use_compile: false            # true면 torch.compile; 재현성엔 off 권장
+
+data:
+  train_path: "/path/to/train.parquet"
+  test_path: "/path/to/test.parquet"
+  cache_dir: "./cache/dare_base"
+  use_cache: true
+  chunked_build: true         # 대용량일 때 Arrow streaming으로 분할 캐싱
+  add_isna_mask: true
+  impute_strategy: "median"   # median | zero
+  cat_cols: ["gender","age_group","inventory_id","day_of_week","hour","l_feat_14"]
+  hash_buckets:               # 카테고리 해시(재현성 deterministic)
+    gender: 16
+    age_group: 64
+    day_of_week: 8
+    hour: 32
+    inventory_id: 2000000
+    l_feat_14: 1000000
+  num_patterns: ["feat_*","history_*","l_feat_*"]  # 실수형 컬럼 패턴
+
+sequence:
+  col: "seq"
+  max_len: 400
+  pad_id: 0
+  top_k: 80
+  recency_tau: 256
+  query_mode: "S1"            # "S1"=타깃광고, "S2"=컨텍스트, "concat"=둘 다
+  query_key: "inventory_id"
+  transformer_block: false     # true면 선택된 topK 위에 얕은 Transformer 1층
+
+model:
+  emb_dim: 64
+  dare_dropout: 0.1
+  qnn_alpha:
+    enabled: false            # DARE 단일
+
+train:
+  batch_size: 16384
+  epochs: 10
+  optimizer: "adamw"
+  lr: 0.001
+  weight_decay: 0.0001
+  warmup_epochs: 1
+  cosine: true
+  early_stop_patience: 3
+  grad_clip_norm: 1.0
+
+cv:
+  n_splits: 5
+  group_key: "inventory_id"   # (1) config로 조절
+  stratify_target: "clicked"
+
+eval:
+  monitor: "score"            # 0.5*AP + 0.5*WLL
+  maximize: true
+
+calibration:
+  enabled: true               # fold val에서 temperature scaling
+  method: "temperature"       # temperature | isotonic
+  lr: 0.05
+  iters: 200
+
+logging:
+  log_dir: "./runs"
+  tb: true
+  csv_log: true
+  verbose_steps: 100

@@ -1,0 +1,341 @@
+exp_name: v3_k120_s1_v2
+seed: 777
+device: cuda
+deterministic: true
+amp: none
+use_compile: false
+data:
+  train_path: /home/biyotteu/dev/toss_v5/data/train.parquet
+  test_path: /home/biyotteu/dev/toss_v5/data/test.parquet
+  cache_dir: ./cache/dare_qnn
+  use_cache: true
+  chunked_build: true
+  shard_rows: 2000000
+  add_isna_mask: true
+  impute_strategy: median
+  cat_cols:
+  - gender
+  - age_group
+  - inventory_id
+  - day_of_week
+  - hour
+  - l_feat_1
+  - l_feat_2
+  - l_feat_3
+  - l_feat_4
+  - l_feat_5
+  - l_feat_6
+  - l_feat_7
+  - l_feat_8
+  - l_feat_9
+  - l_feat_10
+  - l_feat_11
+  - l_feat_12
+  - l_feat_13
+  - l_feat_14
+  - l_feat_15
+  - l_feat_16
+  - l_feat_17
+  - l_feat_18
+  - l_feat_19
+  - l_feat_20
+  - l_feat_21
+  - l_feat_22
+  - l_feat_23
+  - l_feat_24
+  - l_feat_25
+  - l_feat_26
+  - l_feat_27
+  - feat_a_2
+  - feat_a_8
+  - feat_a_9
+  num_cols_explicit:
+  - feat_e_1
+  - feat_e_2
+  - feat_e_3
+  - feat_e_4
+  - feat_e_5
+  - feat_e_6
+  - feat_e_7
+  - feat_e_8
+  - feat_e_9
+  - feat_e_10
+  - feat_d_1
+  - feat_d_2
+  - feat_d_3
+  - feat_d_4
+  - feat_d_5
+  - feat_d_6
+  - feat_c_1
+  - feat_c_2
+  - feat_c_3
+  - feat_c_4
+  - feat_c_5
+  - feat_c_6
+  - feat_c_7
+  - feat_c_8
+  - feat_b_1
+  - feat_b_2
+  - feat_b_3
+  - feat_b_4
+  - feat_b_5
+  - feat_b_6
+  - feat_a_1
+  - feat_a_3
+  - feat_a_4
+  - feat_a_5
+  - feat_a_6
+  - feat_a_7
+  - feat_a_10
+  - feat_a_11
+  - feat_a_12
+  - feat_a_13
+  - feat_a_14
+  - feat_a_15
+  - feat_a_16
+  - feat_a_17
+  - feat_a_18
+  - history_a_1
+  - history_a_2
+  - history_a_3
+  - history_a_4
+  - history_a_5
+  - history_a_6
+  - history_a_7
+  - history_b_1
+  - history_b_2
+  - history_b_3
+  - history_b_4
+  - history_b_5
+  - history_b_6
+  - history_b_7
+  - history_b_8
+  - history_b_9
+  - history_b_10
+  - history_b_11
+  - history_b_12
+  - history_b_13
+  - history_b_14
+  - history_b_15
+  - history_b_16
+  - history_b_17
+  - history_b_18
+  - history_b_19
+  - history_b_20
+  - history_b_21
+  - history_b_22
+  - history_b_23
+  - history_b_24
+  - history_b_25
+  - history_b_26
+  - history_b_27
+  - history_b_28
+  - history_b_29
+  - history_b_30
+  hash_buckets:
+    gender: 1005
+    age_group: 1011
+    day_of_week: 1009
+    hour: 1026
+    inventory_id: 1020
+    l_feat_1: 1004
+    l_feat_2: 1005
+    l_feat_3: 1005
+    l_feat_4: 1028
+    l_feat_5: 2078
+    l_feat_6: 1902
+    l_feat_7: 1315
+    l_feat_8: 1005
+    l_feat_9: 1478
+    l_feat_10: 1264
+    l_feat_11: 2526
+    l_feat_12: 6052
+    l_feat_13: 1004
+    l_feat_14: 4239
+    l_feat_15: 3584
+    l_feat_16: 1004
+    l_feat_17: 1478
+    l_feat_18: 1010
+    l_feat_19: 1005
+    l_feat_20: 1004
+    l_feat_21: 1005
+    l_feat_22: 1005
+    l_feat_23: 1004
+    l_feat_24: 1005
+    l_feat_25: 2790
+    l_feat_26: 1020
+    l_feat_27: 1007
+    feat_a_2: 1008
+    feat_a_8: 1010
+    feat_a_9: 1012
+  hash_buckets_margin: 500
+  num_patterns:
+  - feat_*
+  - history_*
+  - l_feat_*
+  manifest_train: ./cache/dare_qnn/train/manifest.json
+  manifest_test: ./cache/dare_qnn/test/manifest.json
+sequence:
+  col: seq
+  max_len: 400
+  pad_id: 0
+  top_k: 120
+  recency_tau: 512
+  query_mode: S1
+  query_key: inventory_id
+  transformer_block: true
+  tfm:
+    n_layers: 4
+    n_heads: 8
+    mha_dropout: 0.1
+    ffn_hidden: 384
+    ffn_dropout: 0.15
+    norm: rms
+    gating: softmax
+    add_positional_bias: true
+model:
+  emb_dim: 64
+  dare_dropout: 0.25
+  cat_embedding_dims:
+    gender: 8
+    age_group: 8
+    day_of_week: 8
+    hour: 8
+    inventory_id: 32
+    l_feat_1: 8
+    l_feat_2: 8
+    l_feat_3: 8
+    l_feat_4: 8
+    l_feat_5: 33
+    l_feat_6: 30
+    l_feat_7: 18
+    l_feat_8: 8
+    l_feat_9: 22
+    l_feat_10: 17
+    l_feat_11: 40
+    l_feat_12: 64
+    l_feat_13: 8
+    l_feat_14: 57
+    l_feat_15: 51
+    l_feat_16: 8
+    l_feat_17: 22
+    l_feat_18: 8
+    l_feat_19: 8
+    l_feat_20: 8
+    l_feat_21: 8
+    l_feat_22: 8
+    l_feat_23: 8
+    l_feat_24: 8
+    l_feat_25: 43
+    l_feat_26: 8
+    l_feat_27: 8
+    feat_a_2: 8
+    feat_a_8: 8
+    feat_a_9: 8
+  qnn_alpha:
+    enabled: true
+    feature_embed_dim: 32
+    heads: 6
+    rank: 16
+    proj_dim: 192
+    mlp_hidden:
+    - 512
+    - 256
+    dropout: 0.2
+    use_se: true
+    se_reduction: 8
+    use_residual: true
+    norm: rms
+    pair_grouping: all
+    aux_head_weight: 0.1
+train:
+  batch_size: 8192
+  epochs: 8 #8
+  optimizer: adamw
+  lr: 0.0003
+  weight_decay: 0.0001
+  warmup_epochs: 2
+  cosine: true
+  early_stop_patience: 3
+  grad_clip_norm: 0.5
+  monitor: score
+loss:
+  lambda_rank: 0.05          # 0.02~0.10 스윕
+  num_neg_per_pos: 8         # 4~16
+  hard_neg_frac: 0.10        # 상위 10% hard 음성 혼합(0이면 랜덤만)
+  lambda_logit_l2: 1.0e-5    # 1e-6~1e-5
+cv:
+  n_splits: 5
+  group_key: inventory_id
+  stratify_target: clicked
+  time_key: day_of_week
+  composite_group: true
+eval:
+  monitor: score
+  maximize: true
+calibration:
+  enabled: true
+  method: temperature # temperature | isotonic | temperature+isotonic
+  lr: 0.05
+  iters: 200
+logging:
+  log_dir: ./runs
+  tb: true
+  csv_log: true
+  verbose_steps: 100
+ensemble:
+  method: logit_mean 
+  trim_ratio: 0.2
+  weights: []
+  val_weight_temperature: 5.0
+
+sampler:
+  type: None # balanced
+  pos_fraction: 0.5
+  
+ema:
+  enabled: false
+  decay: 0.999
+  warmup_steps: 3000         # 전체 스텝에 맞춰 조절 (대략 0.5~1 epoch 분량)
+  warmup_type: linear        # ["linear","cosine","none"]
+  update_after_step: 0
+  update_interval: 1         # >1로 두면 오버헤드↓, 보통 1이 가장 좋음
+  ema_on_buffers: copy       # BN 등 buffer는 copy가 성능적으로 무난
+  offload_to_cpu: false      # VRAM 넉넉하므로 false 권장 (속도↑)
+  pin_memory: false
+  eval_with_ema: true
+  # param_filter: ["some.param.to.skip"]  # 거의 필요 없음
+
+features:
+  covis:
+    enabled: true
+
+    # 어떤 타깃과 공출현을 낼지 — 보통 'inventory_id' + 'l_feat_14'(ad set)
+    target_keys: ["inventory_id", "l_feat_14"]
+
+    # 시간 민감도
+    use_time_bin: true
+    time_bin: "day_of_week"   # 또는 "hour" / "day_of_week_hour"
+
+    # 시퀀스 파라미터(DARE와 일치시키면 좋음)
+    seq_top_k: 120            # (추천) 현재 최고 성능 후보
+    recency_tau: 512          # exp(-pos/tau) 가중
+
+    # 통계 안정화
+    min_impr: 10              # 이하는 low-count로 취급
+    prior_strength: 50        # 베타 사전 강도 (α,β = p0*S, (1-p0)*S)
+    ctr_clip: [0.001, 0.999]  # 극단값 클리핑
+
+    # 백오프 순서(페일오버)
+    backoff: ["pair", "token", "target", "global"]
+
+    # 집계(행 단위)
+    agg:
+      topn: 3
+      outputs: [
+        "sum_ctr","mean_ctr","max_ctr","top3_mean_ctr",
+        "wmean_ctr","sum_impr","max_impr","pnorm_ctr"
+      ]
+
+    # 입출 경로
+    work_dir: ./cache/covis

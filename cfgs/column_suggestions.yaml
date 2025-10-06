@@ -1,0 +1,330 @@
+cat_include:
+- gender
+- age_group
+- inventory_id
+- day_of_week
+- hour
+- l_feat_1
+- l_feat_2
+- l_feat_3
+- l_feat_4
+- l_feat_5
+- l_feat_6
+- l_feat_7
+- l_feat_8
+- l_feat_9
+- l_feat_10
+- l_feat_11
+- l_feat_12
+- l_feat_13
+- l_feat_14
+- l_feat_15
+- l_feat_16
+- l_feat_17
+- l_feat_18
+- l_feat_19
+- l_feat_20
+- l_feat_21
+- l_feat_22
+- l_feat_23
+- l_feat_24
+- l_feat_25
+- l_feat_26
+- l_feat_27
+- feat_a_2
+- feat_a_8
+- feat_a_9
+dense_include:
+- feat_e_1
+- feat_e_2
+- feat_e_3
+- feat_e_4
+- feat_e_5
+- feat_e_6
+- feat_e_7
+- feat_e_8
+- feat_e_9
+- feat_e_10
+- feat_d_1
+- feat_d_2
+- feat_d_3
+- feat_d_4
+- feat_d_5
+- feat_d_6
+- feat_c_1
+- feat_c_2
+- feat_c_3
+- feat_c_4
+- feat_c_5
+- feat_c_6
+- feat_c_7
+- feat_c_8
+- feat_b_1
+- feat_b_2
+- feat_b_3
+- feat_b_4
+- feat_b_5
+- feat_b_6
+- feat_a_1
+- feat_a_3
+- feat_a_4
+- feat_a_5
+- feat_a_6
+- feat_a_7
+- feat_a_10
+- feat_a_11
+- feat_a_12
+- feat_a_13
+- feat_a_14
+- feat_a_15
+- feat_a_16
+- feat_a_17
+- feat_a_18
+- history_a_1
+- history_a_2
+- history_a_3
+- history_a_4
+- history_a_5
+- history_a_6
+- history_a_7
+- history_b_1
+- history_b_2
+- history_b_3
+- history_b_4
+- history_b_5
+- history_b_6
+- history_b_7
+- history_b_8
+- history_b_9
+- history_b_10
+- history_b_11
+- history_b_12
+- history_b_13
+- history_b_14
+- history_b_15
+- history_b_16
+- history_b_17
+- history_b_18
+- history_b_19
+- history_b_20
+- history_b_21
+- history_b_22
+- history_b_23
+- history_b_24
+- history_b_25
+- history_b_26
+- history_b_27
+- history_b_28
+- history_b_29
+- history_b_30
+embedding_recommendations:
+  gender:
+    recommended_vocab: 1005
+    recommended_emb_dim: 8
+    estimated_params: 8040
+    n_unique_observed: 3
+    notes: null
+  age_group:
+    recommended_vocab: 1011
+    recommended_emb_dim: 8
+    estimated_params: 8088
+    n_unique_observed: 9
+    notes: null
+  inventory_id:
+    recommended_vocab: 1020
+    recommended_emb_dim: 8
+    estimated_params: 8160
+    n_unique_observed: 18
+    notes: null
+  day_of_week:
+    recommended_vocab: 1009
+    recommended_emb_dim: 8
+    estimated_params: 8072
+    n_unique_observed: 7
+    notes: null
+  hour:
+    recommended_vocab: 1026
+    recommended_emb_dim: 8
+    estimated_params: 8208
+    n_unique_observed: 24
+    notes: null
+  l_feat_1:
+    recommended_vocab: 1004
+    recommended_emb_dim: 8
+    estimated_params: 8032
+    n_unique_observed: 2
+    notes: binary_like
+  l_feat_2:
+    recommended_vocab: 1005
+    recommended_emb_dim: 8
+    estimated_params: 8040
+    n_unique_observed: 3
+    notes: null
+  l_feat_3:
+    recommended_vocab: 1005
+    recommended_emb_dim: 8
+    estimated_params: 8040
+    n_unique_observed: 3
+    notes: null
+  l_feat_4:
+    recommended_vocab: 1028
+    recommended_emb_dim: 8
+    estimated_params: 8224
+    n_unique_observed: 26
+    notes: null
+  l_feat_5:
+    recommended_vocab: 2078
+    recommended_emb_dim: 33
+    estimated_params: 68574
+    n_unique_observed: 1076
+    notes: null
+  l_feat_6:
+    recommended_vocab: 1902
+    recommended_emb_dim: 30
+    estimated_params: 57060
+    n_unique_observed: 900
+    notes: null
+  l_feat_7:
+    recommended_vocab: 1315
+    recommended_emb_dim: 18
+    estimated_params: 23670
+    n_unique_observed: 313
+    notes: null
+  l_feat_8:
+    recommended_vocab: 1005
+    recommended_emb_dim: 8
+    estimated_params: 8040
+    n_unique_observed: 3
+    notes: null
+  l_feat_9:
+    recommended_vocab: 1478
+    recommended_emb_dim: 22
+    estimated_params: 32516
+    n_unique_observed: 476
+    notes: null
+  l_feat_10:
+    recommended_vocab: 1264
+    recommended_emb_dim: 17
+    estimated_params: 21488
+    n_unique_observed: 262
+    notes: null
+  l_feat_11:
+    recommended_vocab: 2526
+    recommended_emb_dim: 40
+    estimated_params: 101040
+    n_unique_observed: 1524
+    notes: null
+  l_feat_12:
+    recommended_vocab: 6052
+    recommended_emb_dim: 64
+    estimated_params: 387328
+    n_unique_observed: 5050
+    notes: null
+  l_feat_13:
+    recommended_vocab: 1004
+    recommended_emb_dim: 8
+    estimated_params: 8032
+    n_unique_observed: 2
+    notes: binary_like
+  l_feat_14:
+    recommended_vocab: 4239
+    recommended_emb_dim: 57
+    estimated_params: 241623
+    n_unique_observed: 3237
+    notes: null
+  l_feat_15:
+    recommended_vocab: 3584
+    recommended_emb_dim: 51
+    estimated_params: 182784
+    n_unique_observed: 2582
+    notes: null
+  l_feat_16:
+    recommended_vocab: 1004
+    recommended_emb_dim: 8
+    estimated_params: 8032
+    n_unique_observed: 2
+    notes: binary_like
+  l_feat_17:
+    recommended_vocab: 1478
+    recommended_emb_dim: 22
+    estimated_params: 32516
+    n_unique_observed: 476
+    notes: null
+  l_feat_18:
+    recommended_vocab: 1010
+    recommended_emb_dim: 8
+    estimated_params: 8080
+    n_unique_observed: 8
+    notes: null
+  l_feat_19:
+    recommended_vocab: 1005
+    recommended_emb_dim: 8
+    estimated_params: 8040
+    n_unique_observed: 3
+    notes: null
+  l_feat_20:
+    recommended_vocab: 1004
+    recommended_emb_dim: 8
+    estimated_params: 8032
+    n_unique_observed: 2
+    notes: binary_like
+  l_feat_21:
+    recommended_vocab: 1005
+    recommended_emb_dim: 8
+    estimated_params: 8040
+    n_unique_observed: 3
+    notes: null
+  l_feat_22:
+    recommended_vocab: 1005
+    recommended_emb_dim: 8
+    estimated_params: 8040
+    n_unique_observed: 3
+    notes: null
+  l_feat_23:
+    recommended_vocab: 1004
+    recommended_emb_dim: 8
+    estimated_params: 8032
+    n_unique_observed: 2
+    notes: binary_like
+  l_feat_24:
+    recommended_vocab: 1005
+    recommended_emb_dim: 8
+    estimated_params: 8040
+    n_unique_observed: 3
+    notes: null
+  l_feat_25:
+    recommended_vocab: 2790
+    recommended_emb_dim: 43
+    estimated_params: 119970
+    n_unique_observed: 1788
+    notes: null
+  l_feat_26:
+    recommended_vocab: 1020
+    recommended_emb_dim: 8
+    estimated_params: 8160
+    n_unique_observed: 18
+    notes: null
+  l_feat_27:
+    recommended_vocab: 1007
+    recommended_emb_dim: 8
+    estimated_params: 8056
+    n_unique_observed: 5
+    notes: null
+  feat_a_2:
+    recommended_vocab: 1008
+    recommended_emb_dim: 8
+    estimated_params: 8064
+    n_unique_observed: 6
+    notes: null
+  feat_a_8:
+    recommended_vocab: 1010
+    recommended_emb_dim: 8
+    estimated_params: 8080
+    n_unique_observed: 8
+    notes: null
+  feat_a_9:
+    recommended_vocab: 1012
+    recommended_emb_dim: 8
+    estimated_params: 8096
+    n_unique_observed: 10
+    notes: null

@@ -17,56 +17,8 @@ from src.data.dataset import ShardedDataset, load_labels_groups_for_split, colla
 from src.models.wrapper import CTRModel
 from src.utils.ema import build_ema
 
-# import torch.multiprocessing as mp
-# try:
-#     mp.set_start_method("spawn", force=True)
-# except RuntimeError:
-#     pass
-
-
 def logit_l2(logits): 
     return (logits.float().pow(2).mean())
-
-def pairwise_auc_loss(logits: torch.Tensor, labels: torch.Tensor,
-                      num_neg_per_pos: int = 8,
-                      hard_frac: float = 0.0):  # 0.0이면 전부 랜덤
-    """
-    logits: (B,), labels: (B,)
-    in-batch에서 양성 z+와 음성 z−를 샘플링해 BPR/로지스틱 pairwise 로스.
-    """
-    z = logits.view(-1)
-    y = (labels.view(-1) > 0.5)
-    pos = z[y]     # (P,)
-    neg = z[~y]    # (N,)
-    if pos.numel() == 0 or neg.numel() == 0:
-        return torch.zeros((), device=z.device, dtype=z.dtype)
-
-    # ---- 음성 샘플링 ----
-    N = neg.numel()
-    K = min(N, max(1, num_neg_per_pos * max(1, pos.numel())))
-
-    if hard_frac > 0.0 and N > 10:
-        k_hard = max(1, int(hard_frac * N))
-        # logit 큰 음성 = 어려운 음성
-        hard_vals, hard_idx = torch.topk(neg, k=k_hard)
-        k_rand = max(0, K - k_hard)
-        if k_rand > 0:
-            rand_idx = torch.randint(0, N, (k_rand,), device=z.device)
-            sel_neg = torch.cat([hard_vals, neg[rand_idx]], dim=0)
-        else:
-            sel_neg = hard_vals
-    else:
-        sel_neg = neg[torch.randint(0, N, (K,), device=z.device)]  # 랜덤만
-
-    # sel_neg를 (M, r)로 reshape해서 각 pos와 브로드캐스트 매칭
-    r = num_neg_per_pos
-    M = max(1, sel_neg.numel() // r)
-    sel_neg = sel_neg[:M*r].view(M, r)              # (M, r)
-    pos_rep = pos[:M].unsqueeze(1).expand(-1, r)    # (M, r)
-
-    margin = pos_rep - sel_neg                      # z+ - z-
-    return F.softplus(-margin).mean()               # BPR/로지스틱
-
 
 def bce_wll_style(logits, labels):
     """
@@ -103,11 +55,11 @@ def train_one_fold(cfg, fold, idx_tr, idx_va, manifest_path, logger):
     if use_balanced:
         y_np = train_ds.arrs["y"]
         bsampler = BalancedBatchSampler(y_np, batch_size=bs, pos_fraction=pos_frac, replacement=True, seed=int(cfg.get("seed", 777)), drop_last=True)
-        tr_loader = DataLoader(train_ds, batch_size=bs, sampler=bsampler, num_workers=cfg.get("num_workers", 8),  pin_memory=True, persistent_workers=False, collate_fn=collate_sharded)
+        tr_loader = DataLoader(train_ds, batch_size=bs, sampler=bsampler, num_workers=8,  pin_memory=True, persistent_workers=False, collate_fn=collate_sharded)
     else:
-        tr_loader = DataLoader(train_ds, batch_size=bs, shuffle=True, num_workers=cfg.get("num_workers", 8),  pin_memory=True, persistent_workers=False, collate_fn=collate_sharded)
+        tr_loader = DataLoader(train_ds, batch_size=bs, shuffle=True, num_workers=8,  pin_memory=True, persistent_workers=False, collate_fn=collate_sharded)
     
-    va_loader = DataLoader(val_ds,   batch_size=bs, shuffle=False, num_workers=cfg.get("num_workers", 8), pin_memory=True, persistent_workers=False, collate_fn=collate_sharded)
+    va_loader = DataLoader(val_ds,   batch_size=bs, shuffle=False, num_workers=8, pin_memory=True, persistent_workers=False, collate_fn=collate_sharded)
 
     # 차원정보
     with open(manifest_path, "r") as f:
@@ -166,21 +118,6 @@ def train_one_fold(cfg, fold, idx_tr, idx_va, manifest_path, logger):
                 if aux_w > 0:
                     aux_loss = bce_wll_style(aux_logit, y)
                     loss = loss + aux_w * aux_loss
-
-                # (옵션) 순위 보조항까지 쓰는 경우
-                # lam_rank = cfg["loss"].get("lambda_rank", 0.0)
-                # if lam_rank > 0.0:
-                #     loss_rank = pairwise_auc_loss(
-                #         logits, y,
-                #         num_neg_per_pos=cfg["loss"].get("num_neg_per_pos", 8),
-                #         hard_frac=cfg["loss"].get("hard_neg_frac", 0.0)
-                #     )
-                #     loss = loss + lam_rank * loss_rank
-
-                # # === Logit L2 (메인) ===
-                # lam_l2 = cfg["loss"].get("lambda_logit_l2", 0.0)
-                # if lam_l2 > 0.0:
-                    # loss = loss + lam_l2 * logit_l2(logits)
 
             if scaler.is_enabled():
                 scaler.scale(loss).backward()
