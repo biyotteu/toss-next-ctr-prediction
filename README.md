@@ -144,11 +144,3 @@ This summarizes common keys in `cfgs/*.yaml`. Refer to each YAML for details.
   - Double-check `data.train_path` and `data.test_path` point to real Parquet files.
 
 ---
-
-## 6) License
-- If there is no separate license file, treat this as internal/assignment use. For external distribution, consult the project owner.
-
----
-
-## 7) References
-- For implementations and usage of DARE, QNN-α, etc., refer to the modules and configs (`src/models/*`, `cfgs/*`).
